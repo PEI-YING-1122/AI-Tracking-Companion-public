@@ -1,0 +1,42 @@
+# --- environments ---------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+
+# --- machine / project specific configuration -------------------------------
+configs/site.json
+shots/*.json
+!shots/README.md
+
+# --- data: never in git (test data, shot outputs, work, logs) ---------------
+test_runs/
+manual_qc/
+work/
+logs/
+tests/baselines/*_raw/
+
+# --- production / media formats ---------------------------------------------
+*.exr
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.mp4
+*.mov
+*.abc
+*.fbx
+*.npz
+*.ply
+*.hip
+*.hiplc
+*.hipnc
+*.nk~
+*.autosave
+*.db
+
+# --- OS / editor ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

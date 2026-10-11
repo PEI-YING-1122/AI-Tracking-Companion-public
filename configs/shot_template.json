@@ -1,0 +1,24 @@
+{
+ "schema": "ai_tracking_companion.shot/1",
+ "_help": [
+  "Copy per shot (or generate from a studio template). Only this file knows the project's folder rules.",
+  "vars: free tokens used as {name}. Built-ins: {shot} {scene} {ai_tracking_scene_dir} {ai_tracking_output} {config_dir}.",
+  "Relative paths resolve against this file's folder. #### or %04d both accepted for frame patterns.",
+  "inputs are read only and never copied. outputs are created by the Companion; existing files need --overwrite.",
+  "Outputs may not be inside the AI Tracking install, the AI Tracking scene output, or the source plate folder."
+ ],
+ "vars": {"project_root": "<PROJECT ROOT>"},
+ "shot": "<SHOT NAME>",
+ "inputs": {
+  "ai_tracking_scene_dir": "<AI Tracking output folder>/<scene folder>",
+  "source_plate": "<original plate: video file, sequence folder, or sequence pattern like name.####.exr>"
+ },
+ "outputs": {
+  "lens_dir": "{project_root}/<...>/{shot}/lens",
+  "maya_dir": "{project_root}/<...>/{shot}/maya",
+  "nuke_dir": "{project_root}/<...>/{shot}/nuke",
+  "production_flatten": "{project_root}/<...>/{shot}/flatten/{shot}_flatten.####.exr",
+  "work_dir": "{project_root}/<...>/{shot}/companion_work"
+ },
+ "options": {"developer_nk": false, "render_flatten": true, "verify": true}
+}

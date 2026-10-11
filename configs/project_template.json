@@ -1,0 +1,20 @@
+{
+ "schema": "ai_tracking_companion.project/1",
+ "_help": [
+  "Project-level rules only (no machine paths: those live in configs/site.json).",
+  "Tokens: {project_root} and any key in vars, {shot}, {scene}, {ai_tracking_output}, {ai_tracking_scene_dir}.",
+  "plate_search: ordered by priority; the first rule that yields validated candidates wins.",
+  "fps: fallback when the source has no fps (chain: source -> project fps -> default 24)."
+ ],
+ "name": "<PROJECT NAME>",
+ "vars": {"project_root": "<PROJECT ROOT>"},
+ "fps": 24,
+ "shot_name_regex": "(sq\d{4}_sh\d{4})",
+ "plate_search": [
+  "{project_root}/<plate folder rule>/*{shot}*/exr/*.####.exr"
+ ],
+ "export_root": "{ai_tracking_output}/export",
+ "work_root": "",
+ "flatten_mode": "reference_ai_tracking",
+ "outputs_default": {"lens": true, "maya": true, "nuke": true}
+}

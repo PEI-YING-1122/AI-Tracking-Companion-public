@@ -1,0 +1,22 @@
+[project]
+name = "ai-tracking-companion"
+version = "0.1.0"
+description = "Independent companion for chordee/colmap-camera-tracking: production lens (STMap), Maya and Nuke delivery from finished AI Tracking results."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.4",
+    "opencv-python==4.13.0.92",   # same OpenCV as the AI Tracking lock: identical lens maths
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.7"]
+
+[tool.companion]
+version_name = "Core Production Baseline"
+core_freeze = [
+    "corrected winy", "full-resolution intrinsics", "converged production canvas",
+    "undistort STMap", "converged redistort STMap", "Nuke UV convention",
+    "Camera ABC primary", "FBX + sidecar fallback", "NPZ point cloud",
+    "Maya native particle importer", "Maya loader", "Artist Nuke lens setup", "metadata schema",
+]

@@ -1,0 +1,9 @@
+{
+ "_comment": "Copy to configs/site.json (not tracked by git) and set this workstation's tool locations. Override any key with env COMPANION_<KEY>.",
+ "hython": "C:/Program Files/Side Effects Software/Houdini <version>/bin/hython.exe",
+ "mayapy": "C:/Program Files/Autodesk/Maya<version>/bin/mayapy.exe",
+ "nuke": "C:/Program Files/Nuke<version>/Nuke<version>.exe",
+ "ffprobe": "<ffmpeg>/bin/ffprobe.exe",
+ "ffmpeg": "<ffmpeg>/bin/ffmpeg.exe",
+ "upstream_repo": "<AI Tracking install>/colmap-camera-tracking-master"
+}
