@@ -27,8 +27,9 @@ PY = sys.executable
 sys.path.insert(0, HERE)
 import test_paths as tp  # noqa: E402
 
-BASE = tp.baseline("demo_sh0010")
-_SQ = json.load(open(BASE + "/demo_sh0010.json"))["vars"]   # the baseline shot's real project paths
+BL = tp.baseline_shot()   # production baseline shot: names from the local config only
+BASE = BL["dir"]
+_SQ = json.load(open(BL["shot_config"]))["vars"]   # the baseline shot's real project paths
 SQ_IN = _SQ["input_root"]
 SQ_EXPORT = _SQ["export_root"]
 SQ_PLATE_DIR = _SQ["plate_dir"]
@@ -67,9 +68,9 @@ def main():
     if os.path.exists(TEST_WORK):
         shutil.rmtree(TEST_WORK)
     R = {}
-    sq = "demo_sh0010"
-    proj = BASE + "/projects/demo_project.project.json"
-    amb = BASE + "/projects/demo_project.AMBIGUOUS.project.json"
+    sq = BL["shot"]
+    proj = BL["project"]
+    amb = BL["ambiguous_project"]
     watch = [f"{SQ_EXPORT}/lens/{sq}_undistort_stmap.exr", f"{SQ_EXPORT}/lens/{sq}_redistort_stmap.exr",
              f"{SQ_EXPORT}/maya/{sq}_points.npz", f"{SQ_EXPORT}/nuke/{sq}_lens_setup.nk"]
     before = {p: sha(p) for p in watch}
@@ -100,7 +101,7 @@ def main():
                         "candidates": [{k: c.get(k) for k in ("pattern", "ok", "ncc")} for c in det],
                         "ok": rc == 2 and "plate_ambiguous" in codes(res) and all("ncc" in c for c in det)}
     # C
-    jpg = os.path.dirname(SQ_PLATE_DIR).replace("\\", "/") + "/jpg/plate_demo_sh0010.####.jpg"
+    jpg = BL["plate_jpg_pattern"]
     rc, res, _ = run("--project", amb, "--input", SQ_IN, "--shot", sq, "--plate", jpg, "--dry-run")
     cfg = json.load(open(os.path.join(TEST_WORK, sq, f"{sq}.shot.json")))
     R["C_override"] = {"rc": rc, "status": res.get("status"), "recorded_override": cfg["overrides"].get("source_plate"),
@@ -114,13 +115,13 @@ def main():
                               "ok": rc == 0 and cfg["auto_detect"]["plate"]["status"] == "override"
                               and cfg["inputs"]["source_plate"].endswith(".%04d.jpg")}
     # E
-    rc, res, _ = run("--project", amb, "--input", SQ_IN, "--shot", "demo_sh0010_E", "--plate", SQ_IN + "/jpg/images", "--dry-run")
+    rc, res, _ = run("--project", amb, "--input", SQ_IN, "--shot", sq + "_E", "--plate", SQ_IN + "/jpg/images", "--dry-run")
     R["E_invalid_override"] = {"rc": rc, "issues": codes(res), "ok": rc == 2 and "plate_override_invalid" in codes(res)}
     # F
     nothing = os.path.join(TEST_WORK, "nothing.project.json")
     os.makedirs(TEST_WORK, exist_ok=True)
     json.dump({"plate_search": ["E:/nowhere/*{shot}*/*.####.exr"], "work_root": TEST_WORK}, open(nothing, "w"))
-    rc, res, _ = run("--project", nothing, "--input", SQ_IN, "--shot", "demo_sh0010_F", "--dry-run")
+    rc, res, _ = run("--project", nothing, "--input", SQ_IN, "--shot", sq + "_F", "--dry-run")
     R["F_no_candidate"] = {"rc": rc, "issues": codes(res), "ok": rc == 2 and "plate_none" in codes(res)}
     # G
     multi = os.path.join(TEST_WORK, "multi_scene")

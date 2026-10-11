@@ -1,4 +1,22 @@
 {
- "_help": "Copy to tests/local_test_config.json (untracked) or set env COMPANION_TEST_DATA.",
- "test_data_root": "<path to AI_Tracking_Companion_TestData>"
+ "_help": "Copy to tests/local_test_config.json (untracked) or set env COMPANION_TEST_DATA. 'baseline' names the production baseline shot under <test_data_root>/baseline/<dir>/; 'aliases' maps its real names / paths to the neutral names used in tests/baselines (applied before every comparison).",
+ "test_data_root": "<path to AI_Tracking_Companion_TestData>",
+ "baseline": {
+  "dir": "<folder under baseline/>",
+  "shot": "<shot name>",
+  "shot_config": "<shot>.json",
+  "project_config": "<project>.project.json",
+  "ambiguous_project_config": "<project>.AMBIGUOUS.project.json",
+  "plate_exr_frame": "<one frame of the EXR plate>",
+  "plate_jpg_frame": "<one frame of the JPG plate>",
+  "plate_jpg_pattern": "<JPG plate with #### frame numbers>"
+ },
+ "aliases": {
+  "<real project root>": "D:/projects/demo_project",
+  "<real plate name>": "plate_demo_sh0010",
+  "<real shot name>": "demo_sh0010",
+  "<real project name>": "demo_project",
+  "<real plate folder>": "source",
+  "<real sequence>": "demo"
+ }
 }

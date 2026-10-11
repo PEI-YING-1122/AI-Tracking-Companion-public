@@ -61,7 +61,7 @@ def main():
         if os.path.exists(stale):
             os.remove(stale)
     rcs["capture"] = step("capture", ["tests/baseline_metrics.py", "capture", cand,
-                                      "--extra", tp.baseline("demo_sh0010", "work", "demo_sh0010")])
+                                      "--extra", tp.baseline_shot()["work"]])
     rcs["baseline_v0.1.0"] = step("baseline_compare", ["tests/baseline_metrics.py", "compare",
                                                        "tests/baselines/v0.1.0.json", cand, cmp_path])
     cmp_ = json.load(open(cmp_path, encoding="utf-8")) if os.path.exists(cmp_path) else {

@@ -39,17 +39,16 @@ from PySide6.QtWidgets import QApplication, QComboBox  # noqa: E402
 import companion_gui as G  # noqa: E402
 
 PY = sys.executable
-BASE = tp.baseline("demo_sh0010")
-SQ_IN = json.load(open(BASE + "/demo_sh0010.json"))["vars"]["input_root"]
-SQ_PLATES = os.path.normpath(os.path.join(SQ_IN, "..", "source", "plate_demo_sh0010")).replace("\\", "/")
-SQ_EXR = SQ_PLATES + "/exr/plate_demo_sh0010.1001.exr"
-SQ_JPG = SQ_PLATES + "/jpg/plate_demo_sh0010.1001.jpg"
+BL = tp.baseline_shot()   # production baseline shot: names from the local config only
+SQ_IN = json.load(open(BL["shot_config"]))["vars"]["input_root"]
+SQ_EXR = BL["plate_exr"]
+SQ_JPG = BL["plate_jpg"]
 WF_IN = tp.poc("walking-forest")
 MOCK_C_IN = tp.workflow("mock_project_C", "io", "tracking")
 SCRATCH = tp.workflow("work", "scratch_gui")
 FRESH = SCRATCH + "/export_demo"
 ENV = {"COMPANION_WORK_ROOT": SCRATCH + "/work"}   # builds of this suite never touch other work folders
-SQ = "demo_sh0010"
+SQ = BL["shot"]
 app = QApplication.instance() or QApplication(sys.argv)
 
 

@@ -25,7 +25,6 @@ DEFAULT_CONFIGS = [  # resolved at run time under the test data root
     ("workflow", "mock_project_A/pipeline/configs/WF_0010.shot.json"),
     ("workflow", "mock_project_B/configs/RB_0020.json"),
     ("workflow", "mock_project_C/io/configs/CC_0030.json"),
-    ("baseline", "demo_sh0010/demo_sh0010.json"),
 ]
 
 
@@ -36,7 +35,8 @@ def snapshot(top):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--configs", nargs="+", default=[getattr(tp, k)(p) for k, p in DEFAULT_CONFIGS])
+    ap.add_argument("--configs", nargs="+", default=[getattr(tp, k)(p) for k, p in DEFAULT_CONFIGS]
+                    + [tp.baseline_shot()["shot_config"]])  # the production baseline shot (local config)
     a = ap.parse_args()
     upstream = os.path.dirname(site_config.get("upstream_repo"))
     logs = os.path.join(ROOT, "logs", "workflow")

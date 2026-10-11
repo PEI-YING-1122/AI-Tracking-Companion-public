@@ -8,7 +8,7 @@ Nothing falls back to the repository folder: missing configuration is an error.
 Layout under the root:
     poc/        AI Tracking demo output + PoC work / delivery folders
     workflow/   mock projects A / B / C, their project configs, scratch work
-    baseline/   demo_sh0010 (V1 production baseline): shot / project configs, Companion work
+    baseline/   the production baseline shot (folder named in the local config): shot / project configs, work
     results/    regression result JSON (read by tests/baseline_metrics.py)
     manual_qc/  archive (not used by any test)
 """
@@ -50,6 +50,30 @@ def workflow(*p):
 
 def baseline(*p):
     return _join("baseline", *p)
+
+
+def _local():
+    return json.load(open(LOCAL_CONFIG)) if os.path.exists(LOCAL_CONFIG) else {}
+
+
+def baseline_shot():
+    """The production baseline shot (names / plate frames from the untracked local config, so the
+    repository holds no production names): absolute paths + the shot name."""
+    b = _local().get("baseline")
+    if not b:
+        raise TestDataNotConfigured("tests/local_test_config.json has no 'baseline' section "
+                                    "(see tests/local_test_config.example.json)")
+    d = baseline(b["dir"])
+    return {"shot": b["shot"], "dir": d, "shot_config": f"{d}/{b['shot_config']}",
+            "project": f"{d}/projects/{b['project_config']}", "ambiguous_project": f"{d}/projects/{b['ambiguous_project_config']}",
+            "work": f"{d}/work/{b['shot']}", "plate_exr": b["plate_exr_frame"], "plate_jpg": b["plate_jpg_frame"],
+            "plate_jpg_pattern": b["plate_jpg_pattern"]}
+
+
+def aliases():
+    """real -> neutral names of the baseline shot (longest first); applied before comparisons"""
+    a = _local().get("aliases") or {}
+    return sorted(a.items(), key=lambda kv: -len(kv[0]))
 
 
 def fixture_origins():

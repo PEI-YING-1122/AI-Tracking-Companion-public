@@ -1,6 +1,6 @@
 """Regression baseline: capture / compare every result JSON of the regression suites.
 
-    python tests/baseline_metrics.py capture <out_baseline.json> [--demo <work/shot dir>]
+    python tests/baseline_metrics.py capture <out_baseline.json> [--extra <baseline shot work dir>]
     python tests/baseline_metrics.py compare <baseline.json> <candidate.json>
 
 All numeric and string leaves of <test data>/results/*.json (+ the baseline shot's
@@ -104,12 +104,21 @@ def _relocate(v, rel):
     return v
 
 
+def _alias(v, al):
+    """real names of the production baseline shot -> the neutral names stored in tests/baselines"""
+    for real, neutral in al:
+        v = v.replace(real, neutral)
+    return v
+
+
 def _normalise(d):
     """Make two runs comparable without loosening content checks:
     * manifest files are matched by their key, not by list position (order changed in the
       transactional builder) -> '<manifest>.files.<key>.bytes'
     * validation reads files from the build stage / a remapped copy since the transactional
       builder: compare the FILE NAME of those path leaves (the folder is a build artefact)."""
+    al = tp.aliases()
+    d = {_alias(k, al): v for k, v in d.items()}
     out, idx_key = {}, {}
     rel = _relocations()
     for k, v in d.items():
@@ -123,7 +132,7 @@ def _normalise(d):
                 continue
             k = f"{m.group(1)}.files.{idx_key[(m.group(1), m.group(2))]}.{m.group(3)}"
         if isinstance(v, str):
-            v = _relocate(v, rel)
+            v = _alias(_relocate(v, rel), al)
         if isinstance(v, str) and re.search(r"(\.reads\.[A-Z_]+\.file|loader_info\.metadata)$", k):
             v = os.path.basename(v.replace("\\", "/")).replace(".validate.", ".")
         out[k] = v
