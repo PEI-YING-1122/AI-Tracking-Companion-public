@@ -59,7 +59,16 @@ def substitute(value, tokens, where="project config"):
     return value
 
 
+def project_dir(cfg):
+    return os.path.dirname(cfg["_path"]).replace("\\", "/") if cfg.get("_path") else COMPANION_ROOT.replace("\\", "/")
+
+
 def work_root(cfg):
-    w = cfg.get("work_root") or ""
-    w = os.path.expandvars(w)
-    return os.path.abspath(w) if w else os.path.join(COMPANION_ROOT, "work")
+    """{project_dir} and vars allowed; relative paths are relative to the project file."""
+    w = os.path.expandvars(cfg.get("work_root") or "")
+    if not w:
+        return os.path.join(COMPANION_ROOT, "work")
+    tokens = dict(cfg.get("vars") or {})
+    tokens["project_dir"] = project_dir(cfg)
+    w = substitute(w, tokens, "work_root")
+    return os.path.normpath(w if os.path.isabs(w) else os.path.join(project_dir(cfg), w))

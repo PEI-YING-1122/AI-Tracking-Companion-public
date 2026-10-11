@@ -1,0 +1,4 @@
+{
+ "_help": "Copy to tests/local_test_config.json (untracked) or set env COMPANION_TEST_DATA.",
+ "test_data_root": "<path to AI_Tracking_Companion_TestData>"
+}

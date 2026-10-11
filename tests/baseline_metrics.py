@@ -3,7 +3,7 @@
     python tests/baseline_metrics.py capture <out_baseline.json> [--demo <work/shot dir>]
     python tests/baseline_metrics.py compare <baseline.json> <candidate.json>
 
-All numeric and string leaves of test_runs/results/*.json (+ the baseline shot's
+All numeric and string leaves of <test data>/results/*.json (+ the baseline shot's
 verify / manifest) are flattened to "file:path.to.leaf" -> value.  Volatile leaves
 (timings, timestamps, versions, build ids, absolute work paths) are excluded.
 Numbers must match to 1e-9 relative (the pipeline is deterministic); strings exactly.
@@ -15,9 +15,16 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import test_paths as tp  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import migrate_test_data  # noqa: E402
+# result files ABOUT the regression (summaries, comparisons): not regression values themselves
+META = re.compile(r"^(baseline_compare.*|run_all_summary.*|compare_.*)\.json$")
 VOLATILE = re.compile(r"(seconds|elapsed|created|companion_version|build_id|nuke_log|stdout|stderr|msg|"
-                      r"maya_msg|stmap_msg|_time|timestamp|work_dir|work_bytes|config$|manifest_error|"
+                      r"maya_msg|stmap_msg|_time|timestamp|work_dir|work_bytes|work_mb|config$|manifest_error|"
                       r"\.relocation\.target|project_directory_eval|relocation\.drive|\.error$)", re.I)
 
 
@@ -35,7 +42,9 @@ def flatten(obj, prefix, out):
 
 def capture(out_path, extra_dirs):
     data = {}
-    for p in sorted(glob.glob(os.path.join(ROOT, "test_runs", "results", "*.json"))):
+    for p in sorted(glob.glob(os.path.join(tp.results(), "*.json"))):
+        if META.match(os.path.basename(p)):
+            continue
         flatten(json.load(open(p)), os.path.basename(p), data)
     for d in extra_dirs:
         for p in sorted(glob.glob(os.path.join(d, "*_verify.json"))) + sorted(glob.glob(os.path.join(d, "*_companion_manifest.json"))):
@@ -73,6 +82,28 @@ def _volatile_sizes(d):
     return vol
 
 
+def _relocations():
+    """test data moved out of the repository (GUI implementation STEP 01): old -> new prefixes,
+    then the test data root itself becomes <TEST_DATA> so paths compare across machines."""
+    root = tp.root().replace("\\", "/")
+    pairs = sorted(((s.replace("\\", "/"), d.replace("\\", "/")) for s, d in migrate_test_data.plan(root, only_existing=False)),
+                   key=lambda x: -len(x[0]))
+    return pairs, root
+
+
+def _relocate(v, rel):
+    pairs, root = rel
+    if re.match(r"^[A-Za-z]:[\\/]", v):
+        v = v.replace("\\", "/")
+    for s, d in pairs:
+        if v.lower().startswith(s.lower()) and (len(v) == len(s) or v[len(s)] in "/\\"):
+            v = d + v[len(s):]
+            break
+    if v.lower().startswith(root.lower()):
+        v = "<TEST_DATA>" + v[len(root):]
+    return v
+
+
 def _normalise(d):
     """Make two runs comparable without loosening content checks:
     * manifest files are matched by their key, not by list position (order changed in the
@@ -80,6 +111,7 @@ def _normalise(d):
     * validation reads files from the build stage / a remapped copy since the transactional
       builder: compare the FILE NAME of those path leaves (the folder is a build artefact)."""
     out, idx_key = {}, {}
+    rel = _relocations()
     for k, v in d.items():
         m = re.match(r"^(.*_companion_manifest\.json)\.files\[(\d+)\]\.key$", k)
         if m:
@@ -90,6 +122,8 @@ def _normalise(d):
             if m.group(3) == "key":
                 continue
             k = f"{m.group(1)}.files.{idx_key[(m.group(1), m.group(2))]}.{m.group(3)}"
+        if isinstance(v, str):
+            v = _relocate(v, rel)
         if isinstance(v, str) and re.search(r"(\.reads\.[A-Z_]+\.file|loader_info\.metadata)$", k):
             v = os.path.basename(v.replace("\\", "/")).replace(".validate.", ".")
         out[k] = v
@@ -98,6 +132,9 @@ def _normalise(d):
 
 def compare(a_path, b_path):
     a, b = json.load(open(a_path)), json.load(open(b_path))
+    is_meta = lambda k: bool(META.match(k.split(".json", 1)[0] + ".json"))  # noqa: E731
+    a = {k: v for k, v in a.items() if not is_meta(k) and not VOLATILE.search(k)}
+    b = {k: v for k, v in b.items() if not is_meta(k) and not VOLATILE.search(k)}
     va, vb = _volatile_sizes(a), _volatile_sizes(b)  # per side: list positions differ between runs
     a = _normalise({k: v for k, v in a.items() if k not in va})
     b = _normalise({k: v for k, v in b.items() if k not in vb})

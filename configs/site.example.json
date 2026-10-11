@@ -5,5 +5,8 @@
  "nuke": "C:/Program Files/Nuke<version>/Nuke<version>.exe",
  "ffprobe": "<ffmpeg>/bin/ffprobe.exe",
  "ffmpeg": "<ffmpeg>/bin/ffmpeg.exe",
- "upstream_repo": "<AI Tracking install>/colmap-camera-tracking-master"
+ "upstream_repo": "<AI Tracking install>/colmap-camera-tracking-master",
+ "project_configs": [
+  "<folder with *.project.json files, or one project.json>"
+ ]
 }

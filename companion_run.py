@@ -100,7 +100,7 @@ def shot_config_from_project(a):
     shot = a.shot
     tokens = dict(proj.get("vars") or {})
     tokens.update(shot=shot, scene=os.path.basename(scene_dir), ai_tracking_scene_dir=scene_dir,
-                  ai_tracking_output=os.path.dirname(scene_dir))
+                  ai_tracking_output=os.path.dirname(scene_dir), project_dir=project_config.project_dir(proj))
     work_dir = os.path.join(project_config.work_root(proj), shot).replace("\\", "/")
     cfg_path = os.path.join(work_dir, f"{shot}.shot.json")
     prev = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}

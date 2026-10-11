@@ -3,7 +3,7 @@
     python tests/test_03_nuke_package.py --meta META --out result.json
 
 Steps
-  1. build package (demo shot) under test_runs/packages
+  1. build package (demo shot) under <test data>/poc/packages
   2. .nk path audit (no drive letters / workstation paths)
   3. open + render taps in Nuke at the build location
   4. copy the package to another drive (C: scratch), rename its parent, open + render again
@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(ROOT, "nuke_package"))
 sys.path.insert(0, os.path.join(ROOT, "stmap"))
 sys.path.insert(0, os.path.join(ROOT, "common"))
 sys.path.insert(0, HERE)
+import test_paths as tp  # noqa: E402
 import build_nuke_package as bnp  # noqa: E402
 import stmap_core as sc  # noqa: E402
 import cv2  # noqa: E402
@@ -185,7 +186,7 @@ def compare_dirs(a, b, taps, frames):
 
 def seq_fixture(work):
     """JPG plate shot.1001-1010, tracking frames 2..9 registered, offset 1000"""
-    demo = os.path.join(ROOT, "test_runs", "walking-forest", "12588331_720_1280_24fps")
+    demo = tp.poc("walking-forest", "12588331_720_1280_24fps")
     b = os.path.join(work, "seq_fixture")
     if os.path.exists(b):
         shutil.rmtree(b)
@@ -221,11 +222,11 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--maya-dir", help="production Maya export to include in the package")
     a = ap.parse_args()
-    work = os.path.join(ROOT, "test_runs", "work_03")
+    work = tp.poc("work_03")
     os.makedirs(work, exist_ok=True)
     res = {}
 
-    built = bnp.build(a.meta, os.path.join(ROOT, "test_runs", "packages"), maya_dir=a.maya_dir)
+    built = bnp.build(a.meta, tp.poc("packages"), maya_dir=a.maya_dir)
     pkg, nk = built["package"], built["nk"]
     nk_sha = hashlib.sha256(open(nk, "rb").read()).hexdigest()
     res["package"] = {"root": pkg, "files": sorted(os.path.relpath(p, pkg).replace("\\", "/")
@@ -268,7 +269,7 @@ def main():
     res["sequence_fixture"] = seq_fixture(work)
 
     # Unsupported
-    fx = os.path.join(ROOT, "test_runs", "fixtures", "fisheye", "meta.json")
+    fx = tp.poc("fixtures", "fisheye", "meta.json")
     out_root = os.path.join(work, "unsupported_pkg")
     if os.path.exists(out_root):
         shutil.rmtree(out_root)

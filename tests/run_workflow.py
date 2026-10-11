@@ -17,12 +17,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "common"))
 import site_config  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import test_paths as tp  # noqa: E402
+
 PY = sys.executable
-DEFAULT_CONFIGS = [
-    "test_runs/mock_project_A/pipeline/configs/WF_0010.shot.json",
-    "test_runs/mock_project_B/configs/RB_0020.json",
-    "test_runs/mock_project_C/io/configs/CC_0030.json",
-    "shots/demo_sh0010.json",
+DEFAULT_CONFIGS = [  # resolved at run time under the test data root
+    ("workflow", "mock_project_A/pipeline/configs/WF_0010.shot.json"),
+    ("workflow", "mock_project_B/configs/RB_0020.json"),
+    ("workflow", "mock_project_C/io/configs/CC_0030.json"),
+    ("baseline", "demo_sh0010/demo_sh0010.json"),
 ]
 
 
@@ -33,24 +36,24 @@ def snapshot(top):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--configs", nargs="+", default=DEFAULT_CONFIGS)
+    ap.add_argument("--configs", nargs="+", default=[getattr(tp, k)(p) for k, p in DEFAULT_CONFIGS])
     a = ap.parse_args()
     upstream = os.path.dirname(site_config.get("upstream_repo"))
     logs = os.path.join(ROOT, "logs", "workflow")
     os.makedirs(logs, exist_ok=True)
-    res_dir = os.path.join(ROOT, "test_runs", "results")
+    res_dir = tp.results()
     os.makedirs(res_dir, exist_ok=True)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     before = snapshot(upstream)
     out = {"runs": {}}
 
-    r = subprocess.run([PY, "tests/test_path_resolver.py", a.configs[0], "test_runs/work_resolver",
+    r = subprocess.run([PY, "tests/test_path_resolver.py", a.configs[0], tp.workflow("work", "work_resolver"),
                         os.path.join(res_dir, "test_path_resolver.json")], cwd=ROOT, env=env, capture_output=True, text=True)
     out["path_resolver"] = {"rc": r.returncode, "all_ok": r.stdout.strip().endswith("ALL OK")}
     print(f"[{'OK' if out['path_resolver']['all_ok'] else 'FAIL'}] path resolver guards")
 
     for cfg in a.configs:
-        expect = json.load(open(os.path.join(ROOT, cfg))).get("_expect", {}).get("rc", 0)
+        expect = json.load(open(cfg)).get("_expect", {}).get("rc", 0)
         name = os.path.splitext(os.path.basename(cfg))[0]
         t = time.time()
         with open(os.path.join(logs, f"{name}.log"), "w", encoding="utf-8", errors="replace") as f:
@@ -59,7 +62,7 @@ def main():
         entry = {"rc": rc, "expected_rc": expect, "ok": rc == expect, "seconds": round(time.time() - t)}
         try:
             import path_resolver
-            R = path_resolver.resolve(os.path.join(ROOT, cfg), overwrite=True)
+            R = path_resolver.resolve(cfg, overwrite=True)
             man = R["planned"]["manifest"]
             if os.path.exists(man) and rc == 0:
                 m = json.load(open(man))

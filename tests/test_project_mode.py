@@ -2,7 +2,7 @@
 
     python tests/test_project_mode.py <out.json>
 
-Uses the project configs in shots/projects/ (local, untracked: they hold project paths).
+Uses the project configs under the test data root (baseline/ and workflow/projects/).
   A  demo_sh0010 full build from --project/--input/--shot  -> PASS, plate auto = EXR (rule 0),
      provenance complete, published lens / point data identical to the shot-config build
   B  one rule matches EXR + JPG                             -> BLOCKED plate_ambiguous (content check ran)
@@ -24,10 +24,15 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = sys.executable
-PROJ = os.path.join(ROOT, "shots", "projects")
-SQ_IN = "D:/projects/demo_project/work"
-SQ_EXPORT = SQ_IN + "/export"
-TEST_WORK = "E:/AI_Tracking_Companion/test_runs/scratch_projtest"
+sys.path.insert(0, HERE)
+import test_paths as tp  # noqa: E402
+
+BASE = tp.baseline("demo_sh0010")
+_SQ = json.load(open(BASE + "/demo_sh0010.json"))["vars"]   # the baseline shot's real project paths
+SQ_IN = _SQ["input_root"]
+SQ_EXPORT = _SQ["export_root"]
+SQ_PLATE_DIR = _SQ["plate_dir"]
+TEST_WORK = tp.workflow("work", "scratch_projtest")
 
 
 def sha(p):
@@ -63,15 +68,15 @@ def main():
         shutil.rmtree(TEST_WORK)
     R = {}
     sq = "demo_sh0010"
-    proj = os.path.join(PROJ, "demo_project.project.json")
-    amb = os.path.join(PROJ, "demo_project.AMBIGUOUS.project.json")
+    proj = BASE + "/projects/demo_project.project.json"
+    amb = BASE + "/projects/demo_project.AMBIGUOUS.project.json"
     watch = [f"{SQ_EXPORT}/lens/{sq}_undistort_stmap.exr", f"{SQ_EXPORT}/lens/{sq}_redistort_stmap.exr",
              f"{SQ_EXPORT}/maya/{sq}_points.npz", f"{SQ_EXPORT}/nuke/{sq}_lens_setup.nk"]
     before = {p: sha(p) for p in watch}
 
     # A
     rc, res, path = run("--project", proj, "--input", SQ_IN, "--shot", sq, "--overwrite")
-    cfg = json.load(open(os.path.join(ROOT, "work", sq, f"{sq}.shot.json")))
+    cfg = json.load(open(os.path.join(BASE, "work", sq, f"{sq}.shot.json")))
     prov_p = os.path.join(os.path.dirname(path), "shot_config.json") if path else ""
     prov = json.load(open(prov_p)) if os.path.exists(prov_p) else {}
     need = ["shot_name", "input_root", "export_root", "resolved_plate", "resolved_flatten", "hip", "source_resolution",
@@ -95,7 +100,7 @@ def main():
                         "candidates": [{k: c.get(k) for k in ("pattern", "ok", "ncc")} for c in det],
                         "ok": rc == 2 and "plate_ambiguous" in codes(res) and all("ncc" in c for c in det)}
     # C
-    jpg = "D:/projects/demo_project/source/plate_demo_sh0010/jpg/plate_demo_sh0010.####.jpg"
+    jpg = os.path.dirname(SQ_PLATE_DIR).replace("\\", "/") + "/jpg/plate_demo_sh0010.####.jpg"
     rc, res, _ = run("--project", amb, "--input", SQ_IN, "--shot", sq, "--plate", jpg, "--dry-run")
     cfg = json.load(open(os.path.join(TEST_WORK, sq, f"{sq}.shot.json")))
     R["C_override"] = {"rc": rc, "status": res.get("status"), "recorded_override": cfg["overrides"].get("source_plate"),
@@ -127,16 +132,16 @@ def main():
     R["G_two_scenes"] = {"rc": rc, "issues": codes(res), "detail": next((i["detail"] for i in res.get("issues", []) if i["code"] == "scene"), None),
                          "ok": rc == 2 and "scene" in codes(res)}
     # H
-    rc, res, path = run("--project", os.path.join(PROJ, "mock_C.project.json"),
-                        "--input", "E:/AI_Tracking_Companion/test_runs/mock_project_C/io/tracking", "--shot", "CC_0030", "--overwrite")
+    rc, res, path = run("--project", tp.workflow("projects", "mock_C.project.json"),
+                        "--input", tp.workflow("mock_project_C", "io", "tracking"), "--shot", "CC_0030", "--overwrite")
     prov_p = os.path.join(os.path.dirname(path), "shot_config.json") if path else ""
     prov = json.load(open(prov_p)) if os.path.exists(prov_p) else {}
     R["H_mock_C"] = {"rc": rc, "status": res.get("status"), "plate": prov.get("resolved_plate"), "fps": prov.get("fps"),
                      "fps_source": prov.get("fps_source"), "warnings": [i["code"] for i in res.get("issues", []) if i["level"] == "WARNING"],
                      "ok": rc == 0 and prov.get("fps_source") == "project_config" and (prov.get("resolved_plate") or "").endswith(".%04d.jpg")}
     # I
-    rc, res, _ = run("--project", os.path.join(PROJ, "mock_B.project.json"),
-                     "--input", "E:/AI_Tracking_Companion/test_runs/mock_project_B/TRACK/ai_out", "--shot", "RB_0020", "--overwrite")
+    rc, res, _ = run("--project", tp.workflow("projects", "mock_B.project.json"),
+                     "--input", tp.workflow("mock_project_B", "TRACK", "ai_out"), "--shot", "RB_0020", "--overwrite")
     R["I_mock_B_failed_solve"] = {"rc": rc, "issues": codes(res), "ok": rc == 2 and "unsupported" in codes(res)}
 
     R["all_ok"] = all(v["ok"] for v in R.values() if isinstance(v, dict))

@@ -37,6 +37,7 @@ def main():
     base_dir = os.path.dirname(os.path.abspath(base_cfg)).replace("\\", "/")
     base["vars"] = dict(base.get("vars", {}))
     for k, v in list(base["vars"].items()):  # keep relative vars valid from the test folder
+        v = base["vars"][k] = str(v).replace("{config_dir}", base_dir)
         if not os.path.isabs(str(v)):
             base["vars"][k] = os.path.normpath(os.path.join(base_dir, str(v))).replace("\\", "/")
     fresh = f"{work}/fresh_export"

@@ -2,7 +2,7 @@
 
     python tests/run_poc.py
 
-Assumes the AI Tracking demo output already exists under test_runs/walking-forest
+Assumes the AI Tracking demo output already exists under <test data>/poc/walking-forest
 (produced once by run_autotracker.py with the output path set to the companion).
 Also snapshots the configured upstream installation before and after the test.
 """
@@ -17,17 +17,20 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 sys.path.insert(0, os.path.join(ROOT, "common"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import test_paths as tp  # noqa: E402  (test data lives outside the repository)
+
 import site_config  # noqa: E402
 
 HYTHON = site_config.get("hython")
 UPSTREAM = os.path.dirname(site_config.get("upstream_repo"))  # whole AI Tracking install, READ ONLY
 SCENE = "12588331_720_1280_24fps"
-RUN = os.path.join(ROOT, "test_runs", "walking-forest")
+RUN = tp.poc("walking-forest")
 SCENE_DIR = os.path.join(RUN, SCENE)
 HIP = os.path.join(SCENE_DIR, f"{SCENE}.hip")
 VIDEO = os.path.join(site_config.get("upstream_repo"), "demo-test", "walking-forest", f"{SCENE}.mp4")
-DELIV = os.path.join(ROOT, "test_runs", "deliveries", SCENE)
-RES = os.path.join(ROOT, "test_runs", "results")
+DELIV = tp.poc("deliveries", SCENE)
+RES = tp.results()
 LOGS = os.path.join(ROOT, "logs", "run_poc")
 
 
@@ -74,7 +77,7 @@ def main():
     rcs["t01b_synth"] = step("01b_winy_synthetic", [HYTHON, "tests/test_01b_hou_winy_synthetic.py",
                                                      os.path.join(RES, "test_01b_synthetic.json")])
     rcs["t01_offset"] = step("01_frame_offset", [PY, "tests/test_01_frame_offset.py", meta, HIP,
-                                                 os.path.join(ROOT, "test_runs", "work_01_offset"),
+                                                 tp.poc("work_01_offset"),
                                                  os.path.join(RES, "test_01_frame_offset.json")])
     rcs["stmap"] = step("02_stmap_generator", [PY, "stmap/stmap_generator.py", "--meta", meta, "--out-dir", os.path.join(DELIV, "stmap")])
     smeta = os.path.join(DELIV, "stmap", f"{SCENE}_stmap_meta.json")
@@ -84,21 +87,21 @@ def main():
     rcs["r1_maya_prod_validate"] = step("01p_maya_production_validate", [
         PY, "tests/test_r1_maya_production.py", meta, os.path.join(DELIV, "maya_production"), os.path.join(DELIV, "stmap"),
         os.path.join(RES, "r1_maya_production.json")])
-    w2a = os.path.join(ROOT, "test_runs", "work_02a")
+    w2a = tp.poc("work_02a")
     rcs["t02a"] = step("02a_proxy", [PY, "tests/test_02a_proxy.py", "--meta", meta, "--work", w2a, "--out", os.path.join(RES, "test_02a.json")])
     rcs["t02a_extra"] = step("02a_nuke_extra", [PY, "tests/test_02a_nuke_extra.py", meta, w2a, os.path.join(RES, "test_02a_nuke_extra.json")])
     rcs["t02b"] = step("02b_fullres_camera", [PY, "tests/test_02b_fullres_camera.py", meta, os.path.join(DELIV, "maya"),
                                               os.path.join(DELIV, "stmap"), os.path.join(RES, "test_02b_fullres_camera.json")])
     rcs["t02c"] = step("02c_roundtrip", [PY, "tests/test_02c_roundtrip.py", "--meta", meta, "--stmap-dir", os.path.join(DELIV, "stmap"),
-                                         "--work", os.path.join(ROOT, "test_runs", "work_02c"), "--out", os.path.join(RES, "test_02c.json")])
+                                         "--work", tp.poc("work_02c"), "--out", os.path.join(RES, "test_02c.json")])
     rcs["t_meta"] = step("03_meta_unsupported", [PY, "tests/test_meta_and_unsupported.py", "--demo-scene", SCENE_DIR,
-                                                 "--work", os.path.join(ROOT, "test_runs", "fixtures"),
+                                                 "--work", tp.poc("fixtures"),
                                                  "--out", os.path.join(RES, "test_meta_and_unsupported.json")])
     rcs["t03_nuke_package"] = step("04_nuke_package", [PY, "tests/test_03_nuke_package.py", "--meta", meta,
                                                          "--maya-dir", os.path.join(DELIV, "maya_production"),
                                                          "--out", os.path.join(RES, "test_03.json")])
     rcs["t03b_canvas"] = step("04b_canvas_coverage", [PY, "tests/test_03b_canvas_coverage.py", meta,
-                                                       os.path.join(ROOT, "test_runs", "packages", SCENE),
+                                                       tp.poc("packages", SCENE),
                                                        os.path.join(RES, "test_03b_canvas_coverage.json")])
     after = snapshot(UPSTREAM)
     changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
