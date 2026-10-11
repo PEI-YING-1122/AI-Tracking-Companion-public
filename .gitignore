@@ -6,6 +6,7 @@ __pycache__/
 # --- machine / project specific configuration -------------------------------
 configs/site.json
 shots/*.json
+shots/**/*.json
 !shots/README.md
 
 # --- data: never in git (test data, shot outputs, work, logs) ---------------

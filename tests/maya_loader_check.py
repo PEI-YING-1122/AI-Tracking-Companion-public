@@ -1,6 +1,9 @@
 """Run a generated <shot>_load_maya.py in headless Maya and validate the result.  mayapy only.
 
-    mayapy maya_loader_check.py <loader.py> <houdini_reference_corrected.json> <out.json>
+    mayapy maya_loader_check.py <loader.py> <houdini_reference_corrected.json> <out.json> [<metadata override>]
+
+The optional metadata override is used for stage validation: the delivered loader code runs
+unchanged, only the metadata it reads is a copy with export paths mapped to the stage.
 
 Checks: fps / timeline / render resolution; hierarchy (AI_TRACKING_GRP with CAM and
 POINTCLOUD, image plane under the camera, no stray DAG nodes); camera world matrix vs
@@ -26,6 +29,11 @@ def main():
     cmds.file(new=True, force=True)
     dag_before = set(cmds.ls(dag=True, long=True))
     g = runpy.run_path(loader, run_name="companion_check")   # defines load(), read_npz()
+    if len(sys.argv) > 4:
+        override = sys.argv[4]
+        # run_path returns a COPY of the module globals: patch the dict the functions actually use,
+        # otherwise the loader would read the export (old delivery) instead of the stage
+        g["load"].__globals__["_metadata_path"] = lambda: override
     info = g["load"]()
     dag_new = sorted(set(cmds.ls(dag=True, long=True)) - dag_before)
     meta = json.load(open(info["metadata"]))

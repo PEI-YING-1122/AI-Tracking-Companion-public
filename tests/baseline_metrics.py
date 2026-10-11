@@ -73,11 +73,34 @@ def _volatile_sizes(d):
     return vol
 
 
+def _normalise(d):
+    """Make two runs comparable without loosening content checks:
+    * manifest files are matched by their key, not by list position (order changed in the
+      transactional builder) -> '<manifest>.files.<key>.bytes'
+    * validation reads files from the build stage / a remapped copy since the transactional
+      builder: compare the FILE NAME of those path leaves (the folder is a build artefact)."""
+    out, idx_key = {}, {}
+    for k, v in d.items():
+        m = re.match(r"^(.*_companion_manifest\.json)\.files\[(\d+)\]\.key$", k)
+        if m:
+            idx_key[(m.group(1), m.group(2))] = v
+    for k, v in d.items():
+        m = re.match(r"^(.*_companion_manifest\.json)\.files\[(\d+)\]\.(\w+)$", k)
+        if m and (m.group(1), m.group(2)) in idx_key:
+            if m.group(3) == "key":
+                continue
+            k = f"{m.group(1)}.files.{idx_key[(m.group(1), m.group(2))]}.{m.group(3)}"
+        if isinstance(v, str) and re.search(r"(\.reads\.[A-Z_]+\.file|loader_info\.metadata)$", k):
+            v = os.path.basename(v.replace("\\", "/")).replace(".validate.", ".")
+        out[k] = v
+    return out
+
+
 def compare(a_path, b_path):
     a, b = json.load(open(a_path)), json.load(open(b_path))
-    vol = _volatile_sizes(a) | _volatile_sizes(b)
-    a = {k: v for k, v in a.items() if k not in vol}
-    b = {k: v for k, v in b.items() if k not in vol}
+    va, vb = _volatile_sizes(a), _volatile_sizes(b)  # per side: list positions differ between runs
+    a = _normalise({k: v for k, v in a.items() if k not in va})
+    b = _normalise({k: v for k, v in b.items() if k not in vb})
     only_a = sorted(set(a) - set(b))
     only_b = sorted(set(b) - set(a))
     diff = sorted(k for k in set(a) & set(b) if not same(a[k], b[k]))

@@ -29,6 +29,22 @@ from test_01_validate import truth_pixels, maya_pixels_explicit, errstats, fnum,
 MAYA_TOL_PX = 0.01
 
 
+def _remapped(R, path, name):
+    """Stage validation: a copy of a delivery file with final paths mapped to the stage.
+    The delivered file itself (final paths) is never changed."""
+    rm = R.get("validate_remap")
+    if not rm:
+        return path
+    txt = open(path, encoding="utf-8").read()
+    for a, b in rm["pairs"]:
+        txt = txt.replace(a, b)
+    os.makedirs(rm["dir"], exist_ok=True)
+    out = os.path.join(rm["dir"], name)
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
+        f.write(txt)
+    return out
+
+
 def _corner_zero(img, plate, k=16):
     """exact-zero pixels in the four k x k corners where the plate is not black"""
     h, w = img.shape[:2]
@@ -42,14 +58,16 @@ def _nuke(R, plate, out_dir, smeta, meta):
     f1, f2 = plate[1], plate[2]
     frames = sorted({f1, (f1 + f2) // 2, f2})
     nd = os.path.join(out_dir, "nuke")
+    nk = _remapped(R, P["nuke_setup"], os.path.basename(P["nuke_setup"]).replace(".nk", ".validate.nk"))
     r = subprocess.run([site_config.get("nuke"), "-t", os.path.join(ROOT, "nuke_package", "check_nuke_setup.py"),
-                        P["nuke_setup"], nd, "frames=" + ",".join(map(str, frames))], capture_output=True, text=True)
+                        nk, nd, "frames=" + ",".join(map(str, frames))], capture_output=True, text=True)
     chk = json.load(open(os.path.join(nd, "check.json"))) if os.path.exists(os.path.join(nd, "check.json")) else {}
     imgs = {}
     stats_ = {}
     for f in frames:
         for t in ("PLATE", "UNDISTORT", "REFERENCE", "REDISTORT", "ROUNDTRIP"):
-            imgs[(t, f)] = cv2.imread(os.path.join(nd, f"{t}.{f:04d}.exr"), cv2.IMREAD_UNCHANGED)
+            fp_ = os.path.join(nd, f"{t}.{f:04d}.exr")
+            imgs[(t, f)] = cv2.imread(fp_, cv2.IMREAD_UNCHANGED) if os.path.exists(fp_) else None
         if imgs[("REFERENCE", f)] is None:   # flatten_mode none: no reference node
             imgs[("REFERENCE", f)] = imgs[("UNDISTORT", f)]
         pl, rt, ex = imgs[("PLATE", f)], imgs[("ROUNDTRIP", f)], imgs[("REDISTORT", f)]
@@ -107,8 +125,11 @@ def _nuke(R, plate, out_dir, smeta, meta):
 def _maya_loader(R, out_dir, maya_stage):
     P = R["planned"]
     out = os.path.join(out_dir, "maya_loader_check.json")
-    r = subprocess.run([site_config.get("mayapy"), os.path.join(HERE, "maya_loader_check.py"), P["maya_loader"],
-                        os.path.join(maya_stage, "houdini_reference_corrected.json"), out], capture_output=True, text=True)
+    cmd = [site_config.get("mayapy"), os.path.join(HERE, "maya_loader_check.py"), P["maya_loader"],
+           os.path.join(maya_stage, "houdini_reference_corrected.json"), out]
+    if R.get("validate_remap"):  # the delivered loader, reading a stage-remapped metadata copy
+        cmd.append(_remapped(R, P["metadata"], os.path.basename(P["metadata"]).replace(".json", ".validate.json")))
+    r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return {"error": (r.stdout + r.stderr)[-2000:]}, {"maya_loader_runs": False}
     c = json.load(open(out))
