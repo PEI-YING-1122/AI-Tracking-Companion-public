@@ -119,7 +119,8 @@ def resolve(config_path, protected_roots=(), overwrite=False):
     if not re.match(r"^[A-Za-z0-9_.-]+$", shot):
         raise ConfigError(f"shot name '{shot}' must be filename-safe")
 
-    opts = {"flatten_mode": "reference_ai_tracking", "project_fps": None, "verify": True, "developer_nk": False}
+    opts = {"flatten_mode": "reference_ai_tracking", "project_fps": None, "verify": True, "developer_nk": False,
+            "backup_keep": 2}
     opts.update(cfg.get("options") or {})
     if opts["flatten_mode"] not in FLATTEN_MODES:
         raise ConfigError(f"options.flatten_mode must be one of {FLATTEN_MODES}")

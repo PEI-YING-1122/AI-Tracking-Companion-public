@@ -11,6 +11,7 @@ Scenarios on one shot (each checked with sha256 snapshots of the export):
   5 Full                        everything
   6 different published solution (fingerprint tampered) + Maya only -> BLOCKED, export untouched
   7 Maya only into a fresh export -> maya + metadata only; no lens / nuke appear
+  8 options.backup_keep = 1          only the newest backup of this export remains (default 2)
 Always: metadata exists; metadata.modules says which build produced each module that
 is present; every module is all-new or all-old (never mixed); nothing unselected is published.
 """
@@ -133,6 +134,21 @@ def main():
     res_all["7_fresh_maya_only"] = r
     shutil.rmtree(R2["outputs"]["export_root"], ignore_errors=True)
     os.remove(fresh_cfg)
+
+    # 8 backup retention override: options.backup_keep = 1 -> one backup of this export remains
+    c3 = copy.deepcopy(c)
+    c3.setdefault("options", {})["backup_keep"] = 1
+    keep_cfg = os.path.join(os.path.dirname(os.path.abspath(cfg)), "_partial_keep1.json")
+    json.dump(c3, open(keep_cfg, "w"), indent=1)
+    rc, res = run(keep_cfg, "--overwrite", "--outputs", "maya")
+    os.remove(keep_cfg)
+    ret = res.get("backup_retention") or {}
+    builds = os.path.join(R["outputs"]["work_dir"], "builds")
+    left = [d for d in ret.get("kept", []) if os.path.isdir(os.path.join(builds, d, "backup"))]
+    gone = [d for d in ret.get("pruned", []) if os.path.isdir(os.path.join(builds, d, "backup"))]
+    res_all["8_backup_keep_override"] = {"rc": rc, "status": res.get("status"), "retention": ret,
+                                         "ok": rc == 0 and ret.get("keep") == 1 and len(ret.get("kept", [])) == 1
+                                         and left == ret["kept"] and not gone and len(ret.get("pruned", [])) >= 1}
 
     res_all["all_ok"] = all(v["ok"] for v in res_all.values() if isinstance(v, dict))
     json.dump(res_all, open(out, "w"), indent=1, default=str)

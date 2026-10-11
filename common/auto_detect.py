@@ -261,6 +261,10 @@ def _candidate_from_path(p):
     p = p.replace("\\", "/")
     if os.path.isfile(p) and os.path.splitext(p)[1].lower() in VIDEO_EXTS:
         return {"kind": "video", "pattern": p, "files": [p]}
+    if os.path.isfile(p) and os.path.splitext(p)[1].lower() in IMAGE_EXTS:  # one frame picked in a file dialog
+        m = SEQ_RE.match(os.path.basename(p))
+        if m:
+            p = os.path.join(os.path.dirname(p), m.group(1) + "#" * len(m.group(2)) + m.group(3)).replace("\\", "/")
     if re.search(r"#+|%0?\d*d", os.path.basename(p)):
         seqs = _sequences([f for f in glob.glob(_glob_pattern(p)) if os.path.isfile(f)])
     elif os.path.isdir(p):

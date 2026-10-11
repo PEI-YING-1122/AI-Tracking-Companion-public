@@ -23,6 +23,10 @@ Deliveries under the export root (names = Artist shot name):
     metadata/  <shot>_metadata.json
     nuke/      <shot>_lens_setup.nk
 Never copies plates / flatten / sources; never writes into AI Tracking; never saves the HIP.
+Detect (what the GUI calls when an AI Tracking folder is chosen; nothing is written to the export):
+    python companion_run.py --project <project.json> --input <AI Tracking folder> --detect [--shot <name>]
+
+Machine-readable lines for wrappers (GUI): "@@STAGE <name>" and finally "@@RESULT <build_result.json>".
 Exit codes: 0 PASS (warnings allowed), 1 FAIL, 2 BLOCKED, 5 CANCELLED.
 """
 import argparse
@@ -93,8 +97,8 @@ def shot_config_from_project(a):
     if a.scene:
         scenes = [s for s in scenes if os.path.basename(s) == a.scene]
     if len(scenes) != 1:
-        raise bt.BuildStop(bt.BLOCKED, "scene", f"{len(scenes)} AI Tracking scene(s) found in {a.input}"
-                           + ("" if scenes else "") + (" -- choose one with --scene" if len(scenes) > 1 else ""),
+        raise bt.BuildStop(bt.BLOCKED, "scene", ("No AI Tracking result found in this folder." if not scenes else
+                                                 "Several AI Tracking results in this folder. Please choose one."),
                            [os.path.basename(s) for s in auto_detect.find_scenes(a.input)])
     scene_dir = scenes[0].replace("\\", "/")
     shot = a.shot
@@ -117,9 +121,10 @@ def shot_config_from_project(a):
         pass
     plate = auto_detect.resolve_plate(proj, tokens, facts, ffp, override=overrides.get("source_plate"))
     if plate["status"] not in ("auto", "override"):
-        msg = {"none": "no source plate candidate passed validation",
-               "ambiguous": "several plate candidates are valid -- Artist override required (--plate)",
-               "override_invalid": "the plate override does not match this AI Tracking scene"}[plate["status"]]
+        msg = {"none": "No source plate found. Please select source plate.",
+               "ambiguous": "Multiple valid plate candidates found. Please select source plate.",
+               "override_invalid": "The selected source plate does not match this AI Tracking scene. "
+                                   "Please select another source plate."}[plate["status"]]
         raise bt.BuildStop(bt.BLOCKED, f"plate_{plate['status']}", msg, plate["candidates"])
     export_root = a.export or project_config.substitute(proj["export_root"], tokens, "export_root")
     cfg = {
@@ -130,7 +135,8 @@ def shot_config_from_project(a):
         "inputs": {"ai_tracking_scene_dir": scene_dir, "source_plate": plate["selected"]},
         "outputs": {"export_root": export_root.replace("\\", "/"), "work_dir": work_dir},
         "options": {"flatten_mode": proj.get("flatten_mode", "reference_ai_tracking"),
-                    "project_fps": proj.get("fps"), "fps_override": overrides.get("fps"), "verify": True},
+                    "project_fps": proj.get("fps"), "fps_override": overrides.get("fps"), "verify": True,
+                    "backup_keep": int(proj.get("backup_keep", 2))},
         "overrides": overrides,
         "auto_detect": {"scene": os.path.basename(scene_dir), "plate": plate,
                         "shot_name_suggestion": auto_detect.suggest_shot_name(proj.get("shot_name_regex"), plate["selected"], scene_dir)},
@@ -141,6 +147,130 @@ def shot_config_from_project(a):
 
 
 # ------------------------------------------------------------------ helpers
+def stage_marker(name):
+    print(f"@@STAGE {name}", flush=True)
+
+
+def apply_fps_chain(meta, opts, record):
+    src = meta["source"]
+    if opts.get("fps_override"):
+        fr = fractions.Fraction(str(opts["fps_override"]))
+        src.update(fps=float(fr), fps_rational=f"{fr.numerator}/{fr.denominator}", fps_source="artist_override")
+    elif src["fps_source"] == "default" and opts.get("project_fps"):
+        fr = fractions.Fraction(str(opts["project_fps"]))
+        src.update(fps=float(fr), fps_rational=f"{fr.numerator}/{fr.denominator}", fps_source="project_config")
+    if src["fps_source"] == "project_config":
+        record.issue(bt.WARNING, "fps_project", f"FPS source metadata unavailable. Using project setting: {src['fps']:g} fps.")
+    elif src["fps_source"] == "default":
+        record.issue(bt.WARNING, "fps_default", "FPS source metadata unavailable. Using default: 24 fps.")
+
+
+def lens_facts(meta):
+    """Production / legacy canvas and full-res camera with the frozen core functions
+    (cheap: no maps).  Same rule as stmap_generator, incl. its crop detection."""
+    import stmap_core as sc
+    tj = json.load(open(meta["transforms_json"]))
+    uj = json.load(open(meta["transforms_undistorted_json"]))
+    cam = sc.Camera(tj)
+    nw, nh, _, _ = sc.canvas(cam, crop=False)
+    crop = (int(uj["w"]), int(uj["h"]), float(uj["cx"]), float(uj["cy"])) == (cam.w, cam.h, cam.cx, cam.cy) \
+        and (nw, nh) != (cam.w, cam.h)
+    full = cam.scaled(int(meta["source"]["width"]), int(meta["source"]["height"]))
+    return {"canvas": list(sc.canvas(full, crop=crop, solver="converged")),
+            "legacy_canvas": list(sc.canvas(full, crop=crop, solver="legacy")),
+            "camera": full.as_dict()}
+
+
+def previous_modules(P, fp):
+    """Modules of the published delivery (same solution only)."""
+    if not os.path.exists(P["metadata"]):
+        return {}
+    old = json.load(open(P["metadata"]))
+    if old.get("fingerprint") != fp:
+        return {}
+    if old.get("modules"):
+        return old["modules"]
+    mods = {}  # metadata written before modules were recorded: infer from the files present
+    for m in ("lens", "maya", "nuke"):
+        files = [P[k] for k in OUTPUT_KEYS[m]]
+        if all(os.path.exists(f) for f in files):
+            mods[m] = {"build_id": old.get("build_id"), "files": files}
+    return mods
+
+
+def _build_export_root(build_dir):
+    try:
+        return json.load(open(os.path.join(build_dir, "shot_config.json"))).get("export_root")
+    except (OSError, ValueError):
+        return None
+
+
+def prune_backups(work_dir, export_root, keep, build_id, record):
+    """Keep the newest `keep` backups of this shot / export delivery.  Called only after a
+    validated publish; backups of other export folders of the same shot are not counted."""
+    builds = os.path.join(work_dir, "builds")
+
+    def same_export(p):  # same folder even when reached through another path (junction, mapped drive)
+        if not p:
+            return False
+        try:
+            return os.path.samefile(p, export_root)
+        except OSError:
+            return os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(export_root))
+    with_backup = sorted((d for d in (os.listdir(builds) if os.path.isdir(builds) else [])
+                          if os.path.isdir(os.path.join(builds, d, "backup")) and any(os.scandir(os.path.join(builds, d, "backup")))
+                          and (d == build_id or same_export(_build_export_root(os.path.join(builds, d))))),
+                         reverse=True)
+    pruned = []
+    for d in with_backup[keep:]:
+        shutil.rmtree(os.path.join(builds, d, "backup"))
+        pruned.append(d)
+    record.extra["backup_retention"] = {"keep": keep, "kept": with_backup[:keep], "pruned": pruned}
+
+
+def detect(a):
+    """Folder scan for the GUI: scene, shot-name candidate, export candidate.  Writes nothing to exports."""
+    proj = project_config.load(a.project)
+    scenes = auto_detect.find_scenes(a.input)
+    if a.scene:
+        scenes = [s for s in scenes if os.path.basename(s) == a.scene]
+    report = {"scenes": [os.path.basename(s) for s in auto_detect.find_scenes(a.input)]}
+    if len(scenes) != 1:
+        raise bt.BuildStop(bt.BLOCKED, "scene", ("No AI Tracking result found in this folder." if not scenes else
+                                                 "Several AI Tracking results in this folder. Please choose one."), report["scenes"])
+    scene_dir = scenes[0].replace("\\", "/")
+    facts = auto_detect.tracking_facts(scene_dir)
+    tokens = dict(proj.get("vars") or {})
+    tokens.update(shot="*", scene=os.path.basename(scene_dir), ai_tracking_scene_dir=scene_dir,
+                  ai_tracking_output=os.path.dirname(scene_dir), project_dir=project_config.project_dir(proj))
+    suggestion = a.shot
+    found = []
+    if not suggestion:
+        ffp = None
+        try:
+            ffp = site_config.get("ffprobe")
+        except (KeyError, FileNotFoundError):
+            pass
+        for ri, rule in enumerate(proj.get("plate_search") or []):
+            for c in auto_detect.candidates_for_rule(project_config.substitute(rule, tokens, "plate_search")):
+                ok, _, _ = auto_detect.cheap_check(c, facts, ffp)
+                if ok:
+                    found.append(c["pattern"])
+        names = {auto_detect.suggest_shot_name(proj.get("shot_name_regex"), p) for p in found}
+        names |= {auto_detect.suggest_shot_name(proj.get("shot_name_regex"), scene_dir)}
+        names.discard(None)
+        suggestion = names.pop() if len(names) == 1 else None
+    export = None
+    if suggestion:
+        tokens["shot"] = suggestion
+        export = project_config.substitute(proj["export_root"], tokens, "export_root").replace("\\", "/")
+    report.update(scene=os.path.basename(scene_dir), scene_dir=scene_dir, shot_suggestion=suggestion,
+                  export_candidate=export, tracking_resolution=facts["tracking_resolution"],
+                  tracking_frames=facts["extracted_frames"], plate_candidates_any_shot=found[:20],
+                  hip=f"{scene_dir}/{os.path.basename(scene_dir)}.hip")
+    return report
+
+
 def plate_read_path(meta, R):
     src = meta["source"]
     if src["kind"] == "video":
@@ -158,7 +288,9 @@ def plate_read_path(meta, R):
 
 def flatten_compatibility(meta, smeta, R):
     tr, src = meta["tracking"], meta["source"]
-    legacy, prod = smeta["legacy_full_canvas_info_only"], smeta["full"]["canvas"]
+    legacy = smeta["legacy_canvas"] if "legacy_canvas" in smeta else smeta["legacy_full_canvas_info_only"]
+    prod = smeta["canvas"] if "canvas" in smeta else smeta["full"]["canvas"]
+    legacy, prod = list(legacy), list(prod)
     n_flat = len(glob.glob(os.path.join(R["inputs"]["tracking_flatten_dir"], "frame_*.jpg")))
     checks = {
         "tracking_resolution_equals_source": [tr["proxy_width"], tr["proxy_height"]] == [src["width"], src["height"]],
@@ -247,6 +379,7 @@ def build_metadata(meta, smeta, R, plate, flat, build_id, fp, outputs):
 # ------------------------------------------------------------------ main build
 def build(cfg_path, a, record, generated_cfg=None):
     t = time.time()
+    stage_marker("preflight")
     # ---- Preflight + Resolve -------------------------------------------------------
     upstream_install = os.path.dirname(site_config.get("upstream_repo"))
     try:
@@ -281,12 +414,49 @@ def build(cfg_path, a, record, generated_cfg=None):
     present = bt.existing_targets(finals)
     if present and not a.overwrite:
         if a.dry_run:  # a check reports it; only a real build is cancelled
-            record.issue(bt.WARNING, "outputs_exist", "delivery already exists -- a build needs --overwrite (old files are backed up)", present)
+            record.issue(bt.WARNING, "outputs_exist", "Existing Delivery Found. Build will ask before overwriting "
+                         "(the current delivery is backed up first).", present)
         else:
             raise bt.BuildStop(bt.CANCELLED, "outputs_exist", "delivery already exists -- rerun with --overwrite (old files are backed up)", present)
     record.step("preflight", bt.PASS, time.time() - t, outputs=sorted(outputs | {"metadata"}))
-    if a.dry_run:
-        print(json.dumps(R, indent=1))
+    stage_marker("resolve")
+    if a.dry_run:  # Check: same resolution and guards as a build, without maps / staging
+        meta = companion_meta.build_meta(I["ai_tracking_scene_dir"], I["source_plate"], I["transforms_json"],
+                                         I["transforms_undistorted_json"])
+        apply_fps_chain(meta, opts, record)
+        if not meta["support"]["supported"]:
+            raise bt.BuildStop(bt.BLOCKED, "unsupported", "Unsupported: " + "; ".join(meta["support"]["reasons"]), meta["support"])
+        plate = plate_read_path(meta, R)
+        lf = lens_facts(meta)
+        flat = None
+        if opts["flatten_mode"] == "reference_ai_tracking":
+            flat = flatten_compatibility(meta, lf, R)
+        tr = meta["tracking"]
+        off = tr["frame_offset_tracking_to_source"] or 0
+        gen = generated_cfg or {}
+        record.extra["check"] = {
+            "shot": shot, "export_root": O["export_root"], "outputs": sorted(outputs | {"metadata"}),
+            "camera": {"scene": os.path.basename(os.path.normpath(I["ai_tracking_scene_dir"])), "hip": I["hip"]},
+            "camera_model": meta["camera"]["colmap_cameras"][0]["model"],
+            "plate": {"path": plate[0], "kind": meta["source"]["kind"],
+                      "status": ((gen.get("auto_detect") or {}).get("plate") or {}).get("status", "config")},
+            "flatten": {"mode": opts["flatten_mode"],
+                        "path": I["tracking_flatten_pattern"] if opts["flatten_mode"] == "reference_ai_tracking" else O.get("production_flatten"),
+                        "compatible": flat["compatible"] if flat else None},
+            "fps": meta["source"]["fps"], "fps_source": meta["source"]["fps_source"],
+            "frames": {"source": [plate[1], plate[2]],
+                       "tracking": [tr["tracking_first_frame"] + off, tr["tracking_last_frame"] + off],
+                       "unregistered": len(tr["unregistered_frames"])},
+            "resolution": {"source": [meta["source"]["width"], meta["source"]["height"]],
+                           "tracking": [tr["proxy_width"], tr["proxy_height"]], "production_canvas": lf["canvas"][:2]},
+            "existing_delivery": present,
+        }
+        if meta["tracking"]["unregistered_frames"]:
+            record.issue(bt.WARNING, "unregistered_frames",
+                         f"{len(meta['tracking']['unregistered_frames'])} tracking frame(s) not registered (black in reference)")
+        if flat and not flat["compatible"]:
+            raise bt.BuildStop(bt.BLOCKED, "flatten_space",
+                               "AI Tracking flatten is not in the production space (set flatten_mode 'none')", flat)
         return None
 
     build_dir = record.build_dir
@@ -315,20 +485,13 @@ def build(cfg_path, a, record, generated_cfg=None):
     meta = companion_meta.build_meta(I["ai_tracking_scene_dir"], I["source_plate"], I["transforms_json"],
                                      I["transforms_undistorted_json"])
     meta["delivery_name"] = shot
-    if opts.get("fps_override"):
-        fr = fractions.Fraction(str(opts["fps_override"]))
-        meta["source"].update(fps=float(fr), fps_rational=f"{fr.numerator}/{fr.denominator}", fps_source="artist_override")
-    elif meta["source"]["fps_source"] == "default" and opts.get("project_fps"):
-        fr = fractions.Fraction(str(opts["project_fps"]))
-        meta["source"].update(fps=float(fr), fps_rational=f"{fr.numerator}/{fr.denominator}", fps_source="project_config")
+    apply_fps_chain(meta, opts, record)
     meta_path = os.path.join(build_dir, f"{shot}_companion_meta.json")
     json.dump(meta, open(meta_path, "w"), indent=1)
     if not meta["support"]["supported"]:
-        raise bt.BuildStop(bt.BLOCKED, "unsupported", "; ".join(meta["support"]["reasons"]), meta["support"])
+        raise bt.BuildStop(bt.BLOCKED, "unsupported", "Unsupported: " + "; ".join(meta["support"]["reasons"]), meta["support"])
     for w in meta["support"]["warnings"]:
         record.issue(bt.WARNING, "source", w)
-    if meta["source"]["fps_source"] == "default":
-        record.issue(bt.WARNING, "fps_default", "source has no fps and no project fps: default 24 used")
     if meta["tracking"]["unregistered_frames"]:
         record.issue(bt.WARNING, "unregistered_frames",
                      f"{len(meta['tracking']['unregistered_frames'])} tracking frame(s) not registered (black in reference)")
@@ -338,6 +501,10 @@ def build(cfg_path, a, record, generated_cfg=None):
 
     import stmap_generator
     smeta = stmap_generator.build(meta, os.path.join(build_dir, "lens_work"), norm="center", solver="converged")
+    lf = lens_facts(meta)  # the Check computed exactly this: prove it
+    if lf["canvas"] != list(smeta["full"]["canvas"]) or lf["camera"] != smeta["full"]["camera"]:
+        raise bt.BuildStop(bt.FAIL, "check_build_mismatch", "check and build disagree on the production canvas",
+                           {"check": lf["canvas"], "build": smeta["full"]["canvas"]})
     flat = None
     if opts["flatten_mode"] == "reference_ai_tracking":
         flat = flatten_compatibility(meta, smeta, R)
@@ -357,6 +524,7 @@ def build(cfg_path, a, record, generated_cfg=None):
     # ---- Stage -----------------------------------------------------------------------
     t = time.time()
     if "lens" in outputs:
+        stage_marker("lens")
         os.makedirs(os.path.dirname(D["lens_undistort"]), exist_ok=True)
         shutil.copy2(smeta["files"]["full_undistort"], D["lens_undistort"])
         shutil.copy2(smeta["files"]["full_redistort"], D["lens_redistort"])
@@ -366,6 +534,7 @@ def build(cfg_path, a, record, generated_cfg=None):
 
     mstage = os.path.join(build_dir, "maya_work")
     if "maya" in outputs:
+        stage_marker("maya")
         cmd = [sys.executable, os.path.join(ROOT, "maya_export", "run_maya_export.py"), "--meta", meta_path,
                "--hip", I["hip"], "--out-dir", mstage, "--modes", "corrected", "--production-canvas", smeta_path]
         if opts.get("verify", True):
@@ -384,11 +553,24 @@ def build(cfg_path, a, record, generated_cfg=None):
         with open(D["maya_loader"], "w", encoding="utf-8", newline="\n") as f:
             f.write(tpl.replace("__METADATA_ABS__", P["metadata"]).replace("__SHOT__", shot))
 
+    prev_mods = previous_modules(P, fp)
+    mods = {}
+    for m in ("lens", "maya", "nuke"):
+        if m in outputs:
+            mods[m] = {"build_id": record.build_id, "files": [P[k] for k in OUTPUT_KEYS[m]]}
+        elif m in prev_mods:  # same solution, not rebuilt: the published module stays as it is
+            mods[m] = prev_mods[m]
     md = build_metadata(meta, smeta, R, plate, flat, record.build_id, fp, outputs)
+    md["modules"] = mods
+    md["nuke"]["status"] = "written" if "nuke" in mods else "not built"
+    record.extra["delivery"] = {m: ("built" if m in outputs else "kept from build " + str(mods[m].get("build_id")) if m in mods
+                                    else "not built") for m in ("maya", "nuke", "lens")}
+    record.extra["delivery"]["metadata"] = "built"
     os.makedirs(os.path.dirname(D["metadata"]), exist_ok=True)
     json.dump(md, open(D["metadata"], "w"), indent=1)
 
     if "nuke" in outputs:
+        stage_marker("nuke")
         import build_nuke_package as bnp
         spec = dict(md)
         spec["_nuke"] = {"path_mode": "absolute", "graph": "artist", "metadata": P["metadata"],
@@ -415,6 +597,7 @@ def build(cfg_path, a, record, generated_cfg=None):
     record.step("stage", bt.PASS, time.time() - t, files=len(staged))
 
     # ---- Validate --------------------------------------------------------------------
+    stage_marker("validate")
     t = time.time()
     leaks = []
     for k in ("metadata", "nuke_setup", "maya_loader"):
@@ -442,6 +625,7 @@ def build(cfg_path, a, record, generated_cfg=None):
     record.step("validate", bt.PASS, time.time() - t)
 
     # ---- Publish ---------------------------------------------------------------------
+    stage_marker("publish")
     t = time.time()
     pairs = [(D[k], P[k]) for k in keys]
     if render:
@@ -451,6 +635,7 @@ def build(cfg_path, a, record, generated_cfg=None):
                      fault_after=int(fault) if fault not in (None, "") else None)
     record.step("publish", bt.PASS, time.time() - t, **pub)
     shutil.rmtree(stage, ignore_errors=True)  # published: do not keep a second copy
+    prune_backups(O["work_dir"], O["export_root"], int(opts.get("backup_keep", 2)), record.build_id, record)  # only after a validated publish
 
     # ---- Summary / provenance --------------------------------------------------------------
     prov = {"build_id": record.build_id, "companion_version": COMPANION_VERSION, "shot_name": shot,
@@ -486,6 +671,9 @@ def build(cfg_path, a, record, generated_cfg=None):
     if os.path.exists(os.path.join(build_dir, f"{shot}_verify.json")):
         shutil.copy2(os.path.join(build_dir, f"{shot}_verify.json"), os.path.join(O["work_dir"], f"{shot}_verify.json"))
     record.extra["export_bytes_added"] = manifest["export_bytes_added"]
+    record.extra["manifest"] = {"export_root": O["export_root"],
+                                "files": [{"key": f["key"], "path": f["path"], "bytes": f["bytes"]} for f in files]}
+    stage_marker("done")
     return manifest
 
 
@@ -501,13 +689,24 @@ def main():
     ap.add_argument("--fps", help="Artist override fps (recorded as artist_override)")
     ap.add_argument("--outputs", nargs="+", choices=ALL_OUTPUTS, help="default: all (metadata is always built)")
     ap.add_argument("--overwrite", action="store_true", help="replace an existing delivery (backed up first)")
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--dry-run", action="store_true", help="Check: resolve and validate inputs, build nothing")
+    ap.add_argument("--detect", action="store_true", help="scan an AI Tracking folder (project mode): scene, shot / export candidates")
     a = ap.parse_args()
 
     shot_guess = a.shot or "unknown"
     record = bt.BuildRecord(None, bt.new_build_id(), shot_guess)
     generated = None
     try:
+        if a.detect:
+            if not (a.project and a.input):
+                raise bt.BuildStop(bt.BLOCKED, "arguments", "detect needs --project and --input")
+            proj = project_config.load(a.project)
+            record.build_dir = os.path.join(project_config.work_root(proj), "_detect", record.build_id).replace("\\", "/")
+            os.makedirs(record.build_dir, exist_ok=True)
+            record.extra["detect"] = detect(a)
+            if not record.extra["detect"].get("shot_suggestion"):
+                record.issue(bt.WARNING, "shot_name", "No shot name could be suggested. Please enter the shot name.")
+            raise StopIteration
         if a.config:
             cfg_path = a.config
         else:
@@ -520,6 +719,8 @@ def main():
         os.makedirs(record.build_dir, exist_ok=True)
         log(f"build {record.build_id}  shot {R0['shot']}  export {R0['outputs']['export_root']}")
         build(cfg_path, a, record, generated or (cfg if cfg.get("overrides") is not None else None))
+    except StopIteration:  # detect finished
+        pass
     except bt.BuildStop as e:
         record.issue(e.level, e.code, e.message, e.detail)
     except path_resolver.ConfigError as e:
@@ -533,6 +734,7 @@ def main():
     res = record.write()
     for i in res["issues"]:
         log(f"{i['level']:9} {i['code']}: {i['message']}")
+    print(f"@@RESULT {record.build_dir}/build_result.json", flush=True)
     log(f"RESULT {res['status']}  (build {res['build_id']}, {res['elapsed_s']} s, "
         f"{len(res['published'])} file(s) published)  -> {record.build_dir}/build_result.json")
     sys.exit(res["exit_code"])

@@ -28,17 +28,31 @@ production tool (transactional builder + GUI) validated on real shots.
   (copy `configs/site.example.json`)
 - ffmpeg / ffprobe
 
+## Usage (GUI)
+```
+python gui/companion_gui.py
+```
+Project, AI Tracking folder, shot name, export folder, Maya / Nuke. The GUI only collects
+input and runs the CLI below (`--detect`, `--dry-run` for Check, then the build); it shows
+the CLI's own result. See `docs/gui.md`. Requires `pip install -e .[gui]` (PySide6).
+
 ## Usage (CLI)
 ```
-python companion_run.py <shot_config.json> [--overwrite] [--dry-run]
+python companion_run.py <shot_config.json> [--overwrite] [--dry-run] [--outputs maya nuke lens]
+python companion_run.py --project <project.json> --input <AI Tracking folder> --shot <name>
+                        [--export <dir>] [--plate <path>] [--overwrite] [--dry-run] [--outputs ...]
+python companion_run.py --project <project.json> --input <AI Tracking folder> --detect
 ```
 A shot config names the AI Tracking scene folder, the source plate and the export root
-(`configs/shot_template.json`). Exit codes: `0` PASS, `1` FAIL, `2` BLOCKED, `5` cancelled
-(outputs exist).
+(`configs/shot_template.json`); project mode builds it from project rules + auto detect.
+Exit codes: `0` PASS / WARNING, `1` FAIL, `2` BLOCKED, `5` cancelled (outputs exist).
+Overwrites back the previous delivery up first; the newest `backup_keep` (default 2)
+backups per shot / export are kept after a validated publish.
 
 ## Layout
 ```
 companion_run.py   CLI / builder entry
+gui/               Artist GUI (PySide6), a shell over companion_run.py
 common/            config, path resolver, shot metadata, version
 stmap/             lens maths and STMap generation (frozen core)
 maya_export/       Houdini -> Maya camera / point cloud, Maya loader template (frozen core)
