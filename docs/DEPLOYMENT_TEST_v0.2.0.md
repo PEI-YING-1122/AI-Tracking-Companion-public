@@ -5,6 +5,9 @@ Workstation: ____________________   Tester: ____________   Date: ____________
 ## 0. Before the test (TD, once per workstation)
 1. Copy the folder **`AI_Tracking_Companion_v0.2.0`** to the workstation
    (local disk recommended, e.g. `D:\Tools\AI_Tracking_Companion_v0.2.0`; a path with spaces is fine).
+   Keep the folder path **short (under ~100 characters)**: Nuke cannot open paths of 260+
+   characters and the build's validation files sit ~110 characters below this folder.
+   Moving the folder later: run `setup.bat` again.
 2. Double-click **`setup.bat`** (creates `.python\` and `.venv\` inside the folder; needs
    internet for Python + packages, or a `wheels\` folder — see setup.bat). Expected last lines:
    `numpy 2.4.6 | opencv 4.13.0 | PySide6 6.11.1` and `Setup complete.`

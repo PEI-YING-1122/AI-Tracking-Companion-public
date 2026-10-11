@@ -45,3 +45,6 @@ AI Tracking itself is not modified.
    ffprobe — locations in `configs/site.json`.
 6. AI Tracking scenes contain absolute paths: an AI Tracking folder that was moved after the
    solve cannot be exported (upstream behaviour, see `docs/known_upstream_behavior.md`).
+7. Nuke cannot open files whose full path reaches 260 characters (Windows MAX_PATH). Keep the
+   Companion folder short (e.g. `D:\Tools\AI_Tracking_Companion_v0.2.0`): its validation files live
+   ~110 characters below it. Export folders and plates follow the same Nuke limit.
