@@ -13,7 +13,7 @@ dependencies = [
 gui = ["PySide6>=6.7"]
 
 [tool.companion]
-version_name = "Core Production Baseline"
+core_baseline = "v0.1.0"   # Core Production Baseline (tag)
 core_freeze = [
     "corrected winy", "full-resolution intrinsics", "converged production canvas",
     "undistort STMap", "converged redistort STMap", "Nuke UV convention",
