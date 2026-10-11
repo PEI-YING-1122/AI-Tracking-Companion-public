@@ -1,6 +1,6 @@
 [project]
 name = "ai-tracking-companion"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "Independent companion for chordee/colmap-camera-tracking: production lens (STMap), Maya and Nuke delivery from finished AI Tracking results."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["PySide6>=6.7"]
+gui = ["PySide6==6.11.1"]   # validated; exact runtime versions: requirements-lock.txt
 
 [tool.companion]
 core_baseline = "v0.1.0"   # Core Production Baseline (tag)

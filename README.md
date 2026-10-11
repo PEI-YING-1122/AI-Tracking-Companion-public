@@ -18,15 +18,18 @@ output and builds the production delivery for Maya and Nuke:
 - It does **not** save the AI Tracking `.hip` (camera fixes happen in memory only).
 
 ## Status
-`v0.1.0` — **Core Production Baseline**. The lens / camera / point-cloud core is frozen and
-regression-locked (see `docs/regression.md`). `v1.0.0` is reserved for the complete
-production tool (transactional builder + GUI) validated on real shots.
+`v0.2.0` — **Production Release**: Artist GUI + transactional builder on the frozen
+`v0.1.0` core (Core Production Baseline, regression-locked, see `docs/regression.md`).
+Release notes: `docs/RELEASE_NOTES_v0.2.0.md`, changes: `CHANGELOG.md`, Artist steps: `QUICK_START.md`.
 
-## Requirements
-- Windows, Python 3.11 (a local `.venv`; `uv venv` + `uv pip install -e .` works)
-- Houdini (hython), Maya (mayapy), Nuke — paths in `configs/site.json`
-  (copy `configs/site.example.json`)
-- ffmpeg / ffprobe
+## Requirements / setup
+- Windows x64; AI Tracking installation, Houdini (hython), Maya (mayapy), Nuke, ffprobe —
+  locations in `configs/site.json` (created from `configs/site.example.json`).
+- Python environment: run `setup.bat` once per workstation. It uses uv (`tools\uv.exe` or uv on
+  PATH) to create `.python\` (Python 3.11.14) and `.venv\` (`requirements-lock.txt`) inside the
+  Companion folder; nothing system-wide. A `.venv` copied from another computer does not work
+  (it points to that computer's Python).
+- Release folder: `python scripts/make_release_package.py <out_dir> [--with-uv <uv.exe>]`.
 
 ## Usage (GUI)
 Double-click `AI_Tracking_Companion.bat` (uses the Companion's `.venv`; or `python gui/companion_gui.py`).
