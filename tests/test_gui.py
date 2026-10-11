@@ -306,6 +306,9 @@ def main():
     # T18 Stop disabled during publish --------------------------------------------------------------
     w = window(SQ_IN, SQ, SQ_EXR, FRESH, maya=False, answer=True,
                env={"COMPANION_TEST_HOLD": "publish", "COMPANION_TEST_HOLD_S": "4"})
+    nuke_only = view(w)
+    R["nuke_only_ready"] = {"status": nuke_only["status"], "messages": nuke_only["messages"],
+                            "ok": nuke_only["status"] == "Ready" and "Lens STMaps are included with Nuke." in nuke_only["messages"]}
     w.run_build()
     reached = wait_log(w, "@@HOLD publish")
     during = view(w)
@@ -318,7 +321,7 @@ def main():
         "status": res.get("status"), "published": published(res),
         "ok": reached and during["buttons"] == {"check": False, "start": False, "stop": False}
         and during["status"] == "Finishing publish transaction..." and no_flag
-        and res.get("status") in ("PASS", "WARNING") and published(res) == ["lens", "metadata", "nuke"]}
+        and res.get("status") == "PASS" and published(res) == ["lens", "metadata", "nuke"]}
     R["K4_button_states"] = {"idle_after_check": R["T12_check"]["view"]["buttons"],
                              "running": R["T14_stop_preflight"]["buttons_while_running"],
                              "publishing": during["buttons"], "after_finish": view(w)["buttons"],

@@ -214,7 +214,7 @@ def shot_config_direct(a):
         "inputs": {"ai_tracking_scene_dir": scene_dir, "source_plate": plate["selected"]},
         "outputs": {"export_root": export_root.replace("\\", "/"), "work_dir": work_dir},
         "options": {"flatten_mode": "reference_ai_tracking", "flatten_fallback_none": True,
-                    "fps_override": a.fps or None, "fps_default_is_info": True, "verify": True, "backup_keep": 2},
+                    "fps_override": a.fps or None, "artist_mode": True, "verify": True, "backup_keep": 2},
         "overrides": {k: v for k, v in (("source_plate", a.plate.strip().replace("\\", "/")), ("fps", a.fps)) if v},
         "auto_detect": {"scene": os.path.basename(scene_dir), "plate": plate},
     }
@@ -275,7 +275,7 @@ def apply_fps_chain(meta, opts, record):
     if src["fps_source"] == "project_config":
         record.issue(bt.WARNING, "fps_project", f"FPS source metadata unavailable. Using project setting: {src['fps']:g} fps.")
     elif src["fps_source"] == "default":
-        if opts.get("fps_default_is_info"):  # direct mode: the documented default, not a warning
+        if opts.get("artist_mode"):  # direct mode: the documented default, not a warning
             note(record, "fps_default", "FPS: 24 (Default). The original plate has no FPS metadata.")
         else:
             record.issue(bt.WARNING, "fps_default", "FPS source metadata unavailable. Using default: 24 fps.")
@@ -543,7 +543,10 @@ def build(cfg_path, a, record, generated_cfg=None):
     outputs = set(a.outputs or ALL_OUTPUTS)
     if "nuke" in outputs and "lens" not in outputs:
         outputs.add("lens")
-        record.issue(bt.WARNING, "dependency", "Nuke needs the lens STMaps: Lens enabled automatically")
+        if opts.get("artist_mode"):  # the GUI includes Lens with Nuke by definition: nothing to attend to
+            note(record, "dependency", "Lens STMaps are included with Nuke.")
+        else:
+            record.issue(bt.WARNING, "dependency", "Nuke needs the lens STMaps: Lens enabled automatically")
     keys = [k for o in sorted(outputs | {"metadata"}) for k in OUTPUT_KEYS[o]]
     tools = {"hython": "maya" in outputs, "mayapy": "maya" in outputs and opts.get("verify", True),
              "nuke": "nuke" in outputs or opts["flatten_mode"] == "render"}
