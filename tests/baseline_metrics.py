@@ -45,16 +45,16 @@ def capture(out_path, extra_dirs):
     for p in sorted(glob.glob(os.path.join(tp.results(), "*.json"))):
         if META.match(os.path.basename(p)):
             continue
-        flatten(json.load(open(p)), os.path.basename(p), data)
+        flatten(json.load(open(p, encoding="utf-8")), os.path.basename(p), data)
     for d in extra_dirs:
         for p in sorted(glob.glob(os.path.join(d, "*_verify.json"))) + sorted(glob.glob(os.path.join(d, "*_companion_manifest.json"))):
             name = os.path.basename(p)
-            j = json.load(open(p))
+            j = json.load(open(p, encoding="utf-8"))
             if name.endswith("_companion_manifest.json"):  # sizes / file list only
                 j = {"files": [{k: f[k] for k in ("key", "bytes")} for f in j.get("files", [])],
                      "export_bytes_added": j.get("export_bytes_added")}
             flatten(j, name, data)
-    json.dump(data, open(out_path, "w"), indent=0, sort_keys=True)
+    json.dump(data, open(out_path, "w", encoding="utf-8"), indent=0, sort_keys=True)
     print(f"captured {len(data)} values -> {out_path}")
 
 
@@ -131,7 +131,7 @@ def _normalise(d):
 
 
 def compare(a_path, b_path):
-    a, b = json.load(open(a_path)), json.load(open(b_path))
+    a, b = json.load(open(a_path, encoding="utf-8")), json.load(open(b_path, encoding="utf-8"))
     is_meta = lambda k: bool(META.match(k.split(".json", 1)[0] + ".json"))  # noqa: E731
     a = {k: v for k, v in a.items() if not is_meta(k) and not VOLATILE.search(k)}
     b = {k: v for k, v in b.items() if not is_meta(k) and not VOLATILE.search(k)}
@@ -157,5 +157,5 @@ if __name__ == "__main__":
     else:
         r = compare(sys.argv[2], sys.argv[3])
         if len(sys.argv) > 4:
-            json.dump(r, open(sys.argv[4], "w"), indent=1, default=str)
+            json.dump(r, open(sys.argv[4], "w", encoding="utf-8"), indent=1, default=str)
         sys.exit(0 if r["identical"] else 1)

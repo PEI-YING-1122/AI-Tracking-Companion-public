@@ -56,11 +56,16 @@ def main():
     if not a.skip_gui:
         rcs["gui"] = step("gui", ["tests/test_gui.py", os.path.join(RES, "test_gui.json")])
     cand = os.path.join(ROOT, "tests", "baselines", "candidate.json")
-    step("capture", ["tests/baseline_metrics.py", "capture", cand, "--extra", tp.baseline("demo_sh0010", "work", "demo_sh0010")])
+    cmp_path = os.path.join(RES, "baseline_compare.json")
+    for stale in (cand, cmp_path):  # never compare a previous run's capture
+        if os.path.exists(stale):
+            os.remove(stale)
+    rcs["capture"] = step("capture", ["tests/baseline_metrics.py", "capture", cand,
+                                      "--extra", tp.baseline("demo_sh0010", "work", "demo_sh0010")])
     rcs["baseline_v0.1.0"] = step("baseline_compare", ["tests/baseline_metrics.py", "compare",
-                                                       "tests/baselines/v0.1.0.json", cand,
-                                                       os.path.join(RES, "baseline_compare.json")])
-    cmp_ = json.load(open(os.path.join(RES, "baseline_compare.json")))
+                                                       "tests/baselines/v0.1.0.json", cand, cmp_path])
+    cmp_ = json.load(open(cmp_path, encoding="utf-8")) if os.path.exists(cmp_path) else {
+        k: None for k in ("baseline_values", "compared", "different", "missing_in_candidate", "new_in_candidate", "identical")}
     summary = {"return_codes": rcs, "all_ok": all(v == 0 for v in rcs.values()),
                "baseline": {k: cmp_[k] for k in ("baseline_values", "compared", "different", "missing_in_candidate",
                                                  "new_in_candidate", "identical")}}
