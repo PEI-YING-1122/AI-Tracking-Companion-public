@@ -29,23 +29,28 @@ production tool (transactional builder + GUI) validated on real shots.
 - ffmpeg / ffprobe
 
 ## Usage (GUI)
-```
-python gui/companion_gui.py
-```
-Project, AI Tracking folder, shot name, export folder, Maya / Nuke. The GUI only collects
-input and runs the CLI below (`--detect`, `--dry-run` for Check, then the build); it shows
-the CLI's own result. See `docs/gui.md`. Requires `pip install -e .[gui]` (PySide6).
+Double-click `AI_Tracking_Companion.bat` (uses the Companion's `.venv`; or `python gui/companion_gui.py`).
+AI Tracking Folder, Shot Name, Original Plate, Export Folder (default `<folder>/export`), FPS,
+Maya / Nuke; Check, Start, Stop. No project config needed. The GUI only collects input and
+runs the CLI below; it shows the CLI's own result. See `docs/gui.md`.
+Requires `uv pip install -e ".[gui]"` (PySide6).
 
 ## Usage (CLI)
 ```
 python companion_run.py <shot_config.json> [--overwrite] [--dry-run] [--outputs maya nuke lens]
+python companion_run.py --input <AI Tracking folder> --shot <name> --plate <original plate>
+                        [--export <dir>] [--fps <override>] [--overwrite] [--dry-run] [--outputs ...]
+                        [--cancel-file <path>]
+python companion_run.py [--project <project.json>] --input <AI Tracking folder> --detect
 python companion_run.py --project <project.json> --input <AI Tracking folder> --shot <name>
                         [--export <dir>] [--plate <path>] [--overwrite] [--dry-run] [--outputs ...]
-python companion_run.py --project <project.json> --input <AI Tracking folder> --detect
 ```
+Direct mode (what the GUI uses) needs no project config: export defaults to
+`<AI Tracking folder>/export`, fps comes from the plate (else 24, else `--fps`).
 A shot config names the AI Tracking scene folder, the source plate and the export root
-(`configs/shot_template.json`); project mode builds it from project rules + auto detect.
-Exit codes: `0` PASS / WARNING, `1` FAIL, `2` BLOCKED, `5` cancelled (outputs exist).
+(`configs/shot_template.json`); project mode (optional preset) builds it from project rules +
+plate auto detect. Exit codes: `0` PASS / WARNING, `1` FAIL, `2` BLOCKED, `5` cancelled
+(outputs exist, or stopped through the cancel file — nothing published).
 Overwrites back the previous delivery up first; the newest `backup_keep` (default 2)
 backups per shot / export are kept after a validated publish.
 

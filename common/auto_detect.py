@@ -104,10 +104,11 @@ def image_size(path):
 def video_info(path, ffprobe):
     r = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
                         "stream=width,height,nb_read_packets", "-of", "csv=p=0", path], capture_output=True, text=True)
-    try:
-        w, h, n = (int(x) for x in r.stdout.strip().split(","))
+    try:  # some files repeat the stream line (side data): the first one is the stream
+        line = next(ln for ln in r.stdout.splitlines() if ln.strip())
+        w, h, n = (int(x) for x in line.strip().split(",")[:3])
         return w, h, n
-    except ValueError:
+    except (ValueError, StopIteration):
         return None, None, None
 
 

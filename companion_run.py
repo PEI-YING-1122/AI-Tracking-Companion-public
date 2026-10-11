@@ -8,6 +8,17 @@ Project mode (auto detect; what the GUI will call):
                             [--export <root>] [--plate <override>] [--scene <name>] [--fps <override>]
                             [--overwrite] [--dry-run] [--outputs lens maya nuke]
 
+Direct mode (no project config; what the Artist GUI calls):
+    python companion_run.py --input <AI Tracking folder> --shot <name> --plate <original plate>
+                            [--export <root>] [--fps <override>] [--scene <name>]
+                            [--overwrite] [--dry-run] [--outputs lens maya nuke] [--cancel-file <path>]
+    export default <AI Tracking folder>/export; fps: source metadata -> 24 -> --fps;
+    work folder <Companion>/work/<shot> (site key / env COMPANION_WORK_ROOT overrides).
+
+Cooperative cancel: when the --cancel-file exists the build stops at the next safe point
+(after preflight / resolve / each stage / validation, never during publish) -> CANCELLED,
+nothing published.
+
 Flow:  Preflight -> Resolve -> Stage -> Validate -> Publish -> Summary
   * everything is built in <work>/builds/<build_id>/stage with the final filenames;
     file contents already carry the final export paths
@@ -24,7 +35,7 @@ Deliveries under the export root (names = Artist shot name):
     nuke/      <shot>_lens_setup.nk
 Never copies plates / flatten / sources; never writes into AI Tracking; never saves the HIP.
 Detect (what the GUI calls when an AI Tracking folder is chosen; nothing is written to the export):
-    python companion_run.py --project <project.json> --input <AI Tracking folder> --detect [--shot <name>]
+    python companion_run.py [--project <project.json>] --input <AI Tracking folder> --detect [--shot <name>]
 
 Machine-readable lines for wrappers (GUI): "@@STAGE <name>" and finally "@@RESULT <build_result.json>".
 Exit codes: 0 PASS (warnings allowed), 1 FAIL, 2 BLOCKED, 5 CANCELLED.
@@ -36,6 +47,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -146,15 +158,116 @@ def shot_config_from_project(a):
     return cfg_path, cfg
 
 
+# ------------------------------------------------------------------ direct mode -> shot config
+SHOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def default_work_root():
+    try:
+        return site_config.get("work_root", must_exist=False).replace("\\", "/")
+    except KeyError:
+        return os.path.join(ROOT, "work").replace("\\", "/")
+
+
+def find_scene(a):
+    scenes = auto_detect.find_scenes(a.input)
+    if a.scene:
+        scenes = [s for s in scenes if os.path.basename(s) == a.scene]
+    if len(scenes) != 1:
+        raise bt.BuildStop(bt.BLOCKED, "scene", ("No AI Tracking result found in this folder." if not scenes else
+                                                 "Several AI Tracking results in this folder. Please choose one."),
+                           [os.path.basename(s) for s in auto_detect.find_scenes(a.input)])
+    return scenes[0].replace("\\", "/")
+
+
+def shot_config_direct(a):
+    """No project config: the Artist names the shot and the original plate; export defaults
+    to <AI Tracking folder>/export; fps = source metadata, else 24, else --fps."""
+    shot = (a.shot or "").strip()
+    if not shot:
+        raise bt.BuildStop(bt.BLOCKED, "shot_name", "Please enter a Shot Name.")
+    if not SHOT_NAME_RE.match(shot):
+        raise bt.BuildStop(bt.BLOCKED, "shot_name", "Shot Name may only contain letters, digits, '_', '-' and '.'.")
+    if not (a.plate or "").strip():
+        raise bt.BuildStop(bt.BLOCKED, "plate_required", "Please select the Original Plate.")
+    if a.fps and parse_fps(a.fps) is None:
+        raise bt.BuildStop(bt.BLOCKED, "fps_invalid", "FPS must be a number such as 24, 23.976, 25 or 29.97.")
+    scene_dir = find_scene(a)
+    facts = auto_detect.tracking_facts(scene_dir)
+    ffp = None
+    try:
+        ffp = site_config.get("ffprobe")
+    except (KeyError, FileNotFoundError):
+        pass
+    plate = auto_detect.resolve_plate({}, {}, facts, ffp, override=a.plate.strip())
+    if plate["status"] != "override":
+        reasons = "; ".join(r for c in plate["candidates"] for r in c.get("reasons", []))
+        raise bt.BuildStop(bt.BLOCKED, "plate_invalid", "The Original Plate does not match this AI Tracking result"
+                           + (f" ({reasons})." if reasons else "."), plate["candidates"])
+    plate["status"] = "artist"
+    work_dir = os.path.join(default_work_root(), shot).replace("\\", "/")
+    export_root = (a.export or "").strip() or os.path.dirname(scene_dir) + "/export"
+    cfg = {
+        "schema": "ai_tracking_companion.shot/2",
+        "_generated_by": f"companion_run direct mode {COMPANION_VERSION}",
+        "shot": shot,
+        "inputs": {"ai_tracking_scene_dir": scene_dir, "source_plate": plate["selected"]},
+        "outputs": {"export_root": export_root.replace("\\", "/"), "work_dir": work_dir},
+        "options": {"flatten_mode": "reference_ai_tracking", "flatten_fallback_none": True,
+                    "fps_override": a.fps or None, "fps_default_is_info": True, "verify": True, "backup_keep": 2},
+        "overrides": {k: v for k, v in (("source_plate", a.plate.strip().replace("\\", "/")), ("fps", a.fps)) if v},
+        "auto_detect": {"scene": os.path.basename(scene_dir), "plate": plate},
+    }
+    os.makedirs(work_dir, exist_ok=True)
+    cfg_path = os.path.join(work_dir, f"{shot}.shot.json")
+    json.dump(cfg, open(cfg_path, "w"), indent=1)
+    return cfg_path, cfg
+
+
 # ------------------------------------------------------------------ helpers
+class Cancel:
+    """Cooperative cancel: the wrapper creates the cancel file; the build checks it only at
+    safe points and never once publishing has started."""
+    file = None
+
+    @classmethod
+    def check(cls, where):
+        hold = os.environ.get("COMPANION_TEST_HOLD")  # test hook: wait here for a Stop (deterministic tests)
+        if hold == where and cls.file:
+            print(f"@@HOLD {where}", flush=True)
+            t0 = time.time()
+            while time.time() - t0 < float(os.environ.get("COMPANION_TEST_HOLD_S", "60")):
+                if cls.file and os.path.exists(cls.file):
+                    break
+                time.sleep(0.1)
+        if cls.file and os.path.exists(cls.file):
+            raise bt.BuildStop(bt.CANCELLED, "cancelled", f"Stopped by the Artist ({where}). Nothing was published; "
+                               "the export folder is unchanged.")
+
+
+
 def stage_marker(name):
     print(f"@@STAGE {name}", flush=True)
+
+
+NTSC = {"23.976": "24000/1001", "23.98": "24000/1001", "29.97": "30000/1001", "47.952": "48000/1001",
+        "59.94": "60000/1001", "119.88": "120000/1001"}
+
+
+def parse_fps(text):
+    """Artist fps text -> Fraction (NTSC decimals mean the exact 1000/1001 rates); None if invalid"""
+    t = str(text).strip()
+    try:
+        fr = fractions.Fraction(NTSC.get(t, t))
+    except (ValueError, ZeroDivisionError):
+        return None
+    return fr if 0 < fr <= 1000 else None
 
 
 def apply_fps_chain(meta, opts, record):
     src = meta["source"]
     if opts.get("fps_override"):
-        fr = fractions.Fraction(str(opts["fps_override"]))
+        fr = parse_fps(opts["fps_override"]) or fractions.Fraction(str(opts["fps_override"]))
         src.update(fps=float(fr), fps_rational=f"{fr.numerator}/{fr.denominator}", fps_source="artist_override")
     elif src["fps_source"] == "default" and opts.get("project_fps"):
         fr = fractions.Fraction(str(opts["project_fps"]))
@@ -162,7 +275,33 @@ def apply_fps_chain(meta, opts, record):
     if src["fps_source"] == "project_config":
         record.issue(bt.WARNING, "fps_project", f"FPS source metadata unavailable. Using project setting: {src['fps']:g} fps.")
     elif src["fps_source"] == "default":
-        record.issue(bt.WARNING, "fps_default", "FPS source metadata unavailable. Using default: 24 fps.")
+        if opts.get("fps_default_is_info"):  # direct mode: the documented default, not a warning
+            note(record, "fps_default", "FPS: 24 (Default). The original plate has no FPS metadata.")
+        else:
+            record.issue(bt.WARNING, "fps_default", "FPS source metadata unavailable. Using default: 24 fps.")
+
+
+def note(record, code, message):
+    """information for the Artist that does not change the status"""
+    record.extra.setdefault("notes", []).append({"code": code, "message": message})
+
+
+def resolve_flatten(meta, facts, R, record):
+    """AI Tracking flatten as the Nuke reference when it is in the production space.  Direct mode
+    (flatten_fallback_none) builds without it otherwise; other modes are BLOCKED as before."""
+    opts = R["options"]
+    if opts["flatten_mode"] != "reference_ai_tracking":
+        return None
+    flat = flatten_compatibility(meta, facts, R)
+    if flat["compatible"]:
+        return flat
+    if opts.get("flatten_fallback_none"):
+        opts["flatten_mode"] = "none"
+        record.issue(bt.WARNING, "flatten_not_used", "The AI Tracking flatten is not in the production space; "
+                     "the Nuke setup is built without a tracking reference.", flat)
+        return None
+    raise bt.BuildStop(bt.BLOCKED, "flatten_space",
+                       "AI Tracking flatten is not in the production space (set flatten_mode 'none')", flat)
 
 
 def lens_facts(meta):
@@ -226,6 +365,19 @@ def prune_backups(work_dir, export_root, keep, build_id, record):
         shutil.rmtree(os.path.join(builds, d, "backup"))
         pruned.append(d)
     record.extra["backup_retention"] = {"keep": keep, "kept": with_backup[:keep], "pruned": pruned}
+
+
+def detect_direct(a):
+    """Folder scan without a project: scene, HIP, tracking facts, export default.  No shot name
+    guess (the Artist names the shot).  Writes nothing to exports."""
+    scene_dir = find_scene(a)
+    facts = auto_detect.tracking_facts(scene_dir)
+    return {"scenes": [os.path.basename(s) for s in auto_detect.find_scenes(a.input)],
+            "scene": os.path.basename(scene_dir), "scene_dir": scene_dir,
+            "hip": f"{scene_dir}/{os.path.basename(scene_dir)}.hip",
+            "export_candidate": os.path.dirname(scene_dir) + "/export",
+            "export_exists": os.path.isdir(os.path.dirname(scene_dir) + "/export"),
+            "tracking_resolution": facts["tracking_resolution"], "tracking_frames": facts["extracted_frames"]}
 
 
 def detect(a):
@@ -414,11 +566,12 @@ def build(cfg_path, a, record, generated_cfg=None):
     present = bt.existing_targets(finals)
     if present and not a.overwrite:
         if a.dry_run:  # a check reports it; only a real build is cancelled
-            record.issue(bt.WARNING, "outputs_exist", "Existing Delivery Found. Build will ask before overwriting "
-                         "(the current delivery is backed up first).", present)
+            note(record, "outputs_exist", "Existing Companion delivery found for this shot. "
+                 "Start will ask before overwriting (the current delivery is backed up first).")
         else:
             raise bt.BuildStop(bt.CANCELLED, "outputs_exist", "delivery already exists -- rerun with --overwrite (old files are backed up)", present)
     record.step("preflight", bt.PASS, time.time() - t, outputs=sorted(outputs | {"metadata"}))
+    Cancel.check("preflight")
     stage_marker("resolve")
     if a.dry_run:  # Check: same resolution and guards as a build, without maps / staging
         meta = companion_meta.build_meta(I["ai_tracking_scene_dir"], I["source_plate"], I["transforms_json"],
@@ -428,9 +581,7 @@ def build(cfg_path, a, record, generated_cfg=None):
             raise bt.BuildStop(bt.BLOCKED, "unsupported", "Unsupported: " + "; ".join(meta["support"]["reasons"]), meta["support"])
         plate = plate_read_path(meta, R)
         lf = lens_facts(meta)
-        flat = None
-        if opts["flatten_mode"] == "reference_ai_tracking":
-            flat = flatten_compatibility(meta, lf, R)
+        flat = resolve_flatten(meta, lf, R, record)
         tr = meta["tracking"]
         off = tr["frame_offset_tracking_to_source"] or 0
         gen = generated_cfg or {}
@@ -446,6 +597,8 @@ def build(cfg_path, a, record, generated_cfg=None):
             "fps": meta["source"]["fps"], "fps_source": meta["source"]["fps_source"],
             "frames": {"source": [plate[1], plate[2]],
                        "tracking": [tr["tracking_first_frame"] + off, tr["tracking_last_frame"] + off],
+                       "count": tr["tracking_last_frame"] - tr["tracking_first_frame"] + 1,
+                       "tracking_internal": [tr["tracking_first_frame"], tr["tracking_last_frame"]],
                        "unregistered": len(tr["unregistered_frames"])},
             "resolution": {"source": [meta["source"]["width"], meta["source"]["height"]],
                            "tracking": [tr["proxy_width"], tr["proxy_height"]], "production_canvas": lf["canvas"][:2]},
@@ -454,9 +607,7 @@ def build(cfg_path, a, record, generated_cfg=None):
         if meta["tracking"]["unregistered_frames"]:
             record.issue(bt.WARNING, "unregistered_frames",
                          f"{len(meta['tracking']['unregistered_frames'])} tracking frame(s) not registered (black in reference)")
-        if flat and not flat["compatible"]:
-            raise bt.BuildStop(bt.BLOCKED, "flatten_space",
-                               "AI Tracking flatten is not in the production space (set flatten_mode 'none')", flat)
+        Cancel.check("resolve")
         return None
 
     build_dir = record.build_dir
@@ -505,12 +656,7 @@ def build(cfg_path, a, record, generated_cfg=None):
     if lf["canvas"] != list(smeta["full"]["canvas"]) or lf["camera"] != smeta["full"]["camera"]:
         raise bt.BuildStop(bt.FAIL, "check_build_mismatch", "check and build disagree on the production canvas",
                            {"check": lf["canvas"], "build": smeta["full"]["canvas"]})
-    flat = None
-    if opts["flatten_mode"] == "reference_ai_tracking":
-        flat = flatten_compatibility(meta, smeta, R)
-        if not flat["compatible"]:
-            raise bt.BuildStop(bt.BLOCKED, "flatten_space",
-                               "AI Tracking flatten is not in the production space (set flatten_mode 'none')", flat)
+    flat = resolve_flatten(meta, smeta, R, record)
     fp = fingerprint(meta, smeta, plate)
     # partial build: the published delivery must be the same solution
     if outputs != set(ALL_OUTPUTS) and os.path.exists(P["metadata"]):
@@ -520,6 +666,7 @@ def build(cfg_path, a, record, generated_cfg=None):
                                {"published": old.get("fingerprint"), "this_build": fp})
     record.extra["fingerprint"] = fp
     record.step("resolve", bt.PASS, time.time() - t, canvas=smeta["full"]["canvas"][:2])
+    Cancel.check("resolve")
 
     # ---- Stage -----------------------------------------------------------------------
     t = time.time()
@@ -528,6 +675,7 @@ def build(cfg_path, a, record, generated_cfg=None):
         os.makedirs(os.path.dirname(D["lens_undistort"]), exist_ok=True)
         shutil.copy2(smeta["files"]["full_undistort"], D["lens_undistort"])
         shutil.copy2(smeta["files"]["full_redistort"], D["lens_redistort"])
+        Cancel.check("lens")
     smeta_path = os.path.join(build_dir, f"{shot}_stmap_meta.json")
     json.dump(smeta, open(smeta_path, "w"), indent=2)
     shutil.rmtree(os.path.join(build_dir, "lens_work"))
@@ -552,6 +700,7 @@ def build(cfg_path, a, record, generated_cfg=None):
         tpl = open(os.path.join(ROOT, "maya_export", "shot_loader_template.py"), encoding="utf-8").read()
         with open(D["maya_loader"], "w", encoding="utf-8", newline="\n") as f:
             f.write(tpl.replace("__METADATA_ABS__", P["metadata"]).replace("__SHOT__", shot))
+        Cancel.check("maya")
 
     prev_mods = previous_modules(P, fp)
     mods = {}
@@ -583,6 +732,7 @@ def build(cfg_path, a, record, generated_cfg=None):
         spec_path = os.path.join(build_dir, f"{shot}_nk_spec.json")
         json.dump(spec, open(spec_path, "w"), indent=1)
         bnp.write_nk(spec_path, D["nuke_setup"], path_mode="absolute")
+        Cancel.check("nuke")
     if render:  # render from a stage-remapped copy (the final paths do not exist yet)
         rnk = remapped_copy(D["nuke_setup"], f"{shot}_lens_setup.render.nk")
         os.makedirs(flat_stage_dir, exist_ok=True)
@@ -623,9 +773,14 @@ def build(cfg_path, a, record, generated_cfg=None):
     else:
         record.issue(bt.WARNING, "not_validated", "validation disabled (options.verify = false)")
     record.step("validate", bt.PASS, time.time() - t)
+    Cancel.check("validate")
+    Cancel.check("before_publish")  # last point a Stop is honoured
 
-    # ---- Publish ---------------------------------------------------------------------
+    # ---- Publish (not interruptible: completes or rolls back) ---------------------------
     stage_marker("publish")
+    if os.environ.get("COMPANION_TEST_HOLD") == "publish":  # test hook: a Stop must be ignored from here on
+        print("@@HOLD publish", flush=True)
+        time.sleep(float(os.environ.get("COMPANION_TEST_HOLD_S", "5")))
     t = time.time()
     pairs = [(D[k], P[k]) for k in keys]
     if render:
@@ -690,29 +845,40 @@ def main():
     ap.add_argument("--outputs", nargs="+", choices=ALL_OUTPUTS, help="default: all (metadata is always built)")
     ap.add_argument("--overwrite", action="store_true", help="replace an existing delivery (backed up first)")
     ap.add_argument("--dry-run", action="store_true", help="Check: resolve and validate inputs, build nothing")
-    ap.add_argument("--detect", action="store_true", help="scan an AI Tracking folder (project mode): scene, shot / export candidates")
+    ap.add_argument("--detect", action="store_true", help="scan an AI Tracking folder: scene, HIP, export default (+ shot candidate in project mode)")
+    ap.add_argument("--cancel-file", help="cooperative cancel: stop at the next safe point once this file exists")
     a = ap.parse_args()
+    Cancel.file = a.cancel_file
 
     shot_guess = a.shot or "unknown"
     record = bt.BuildRecord(None, bt.new_build_id(), shot_guess)
     generated = None
     try:
         if a.detect:
-            if not (a.project and a.input):
-                raise bt.BuildStop(bt.BLOCKED, "arguments", "detect needs --project and --input")
-            proj = project_config.load(a.project)
-            record.build_dir = os.path.join(project_config.work_root(proj), "_detect", record.build_id).replace("\\", "/")
+            if not a.input:
+                raise bt.BuildStop(bt.BLOCKED, "arguments", "detect needs --input")
+            if a.project:
+                proj = project_config.load(a.project)
+                record.build_dir = os.path.join(project_config.work_root(proj), "_detect", record.build_id).replace("\\", "/")
+            else:
+                record.build_dir = os.path.join(default_work_root(), "_detect", record.build_id).replace("\\", "/")
             os.makedirs(record.build_dir, exist_ok=True)
-            record.extra["detect"] = detect(a)
-            if not record.extra["detect"].get("shot_suggestion"):
+            record.extra["detect"] = detect(a) if a.project else detect_direct(a)
+            if a.project and not record.extra["detect"].get("shot_suggestion"):
                 record.issue(bt.WARNING, "shot_name", "No shot name could be suggested. Please enter the shot name.")
             raise StopIteration
         if a.config:
             cfg_path = a.config
-        else:
-            if not (a.project and a.input and a.shot):
+        elif a.project:
+            if not (a.input and a.shot):
                 raise bt.BuildStop(bt.BLOCKED, "arguments", "project mode needs --project, --input and --shot")
             cfg_path, generated = shot_config_from_project(a)
+        else:
+            if not a.input:
+                raise bt.BuildStop(bt.BLOCKED, "arguments", "Please choose the AI Tracking Folder.")
+            # direct mode records go to the default work root even when the inputs are BLOCKED
+            record.build_dir = os.path.join(default_work_root(), "_checks", record.build_id).replace("\\", "/")
+            cfg_path, generated = shot_config_direct(a)
         cfg = json.load(open(cfg_path))
         R0 = path_resolver.resolve(cfg_path, overwrite=True)
         record.build_dir = os.path.join(R0["outputs"]["work_dir"], "builds", record.build_id).replace("\\", "/")

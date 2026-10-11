@@ -1,24 +1,28 @@
 """AI Tracking Companion -- Artist GUI (PySide6).
 
-A thin shell over companion_run.py.  The GUI never computes lens / camera /
-STMap / Nuke data and never resolves paths or validates anything itself:
-  * folder chosen  -> companion_run --detect            (scene, shot candidate, export candidate)
-  * Check          -> companion_run --dry-run           (the CLI's own check report)
-  * Build          -> companion_run [--overwrite]       (stage / validate / publish in the CLI)
-It only collects input, starts the CLI through QProcess and shows the structured
-result (build_result.json written by the CLI).  The CLI keeps working without it.
+A thin shell over companion_run.py (direct mode: no project config needed).  The GUI never
+computes lens / camera / STMap / Nuke data and never resolves or validates paths itself:
+  * AI Tracking Folder chosen -> companion_run --input F --detect      (scene, HIP, export default)
+  * Check                     -> companion_run --input F --shot S --plate P ... --dry-run
+  * Start                     -> the same without --dry-run (--overwrite only after the Artist said Yes)
+  * Stop                      -> creates the --cancel-file; the CLI stops at its next safe point
+                                 (never during publish)
+It only collects input, starts the CLI through QProcess and shows the CLI's structured result
+(build_result.json).  The CLI keeps working without it.
 
-    python gui/companion_gui.py
+    python gui/companion_gui.py        (or double-click AI_Tracking_Companion.bat)
 """
 import json
 import os
 import sys
+import tempfile
+import uuid
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QUrl, Signal, Qt
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, QUrl, Signal, Qt
 from PySide6.QtGui import QDesktopServices, QFont
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame,
-                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-                               QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+                               QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton,
+                               QVBoxLayout, QWidget)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "common"))
@@ -31,32 +35,32 @@ STAGES = [("preflight", "Preflight"), ("resolve", "Resolving"), ("lens", "Buildi
 STATUS_STYLE = {"PASS": ("Ready", "#2e7d32"), "WARNING": ("Ready (warnings)", "#b26a00"),
                 "BLOCKED": ("BLOCKED", "#c62828"), "FAIL": ("FAIL", "#c62828"),
                 "CANCELLED": ("Cancelled", "#555555"), "BUILD": ("BUILD COMPLETE", "#2e7d32")}
-PLATE_ISSUES = ("plate_none", "plate_ambiguous", "plate_override_invalid")
+FPS_SOURCE = {"ffprobe": "Video Metadata", "exr_header": "EXR Header", "default": "Default",
+              "artist_override": "Artist Override", "project_config": "Project Setting"}
+PLATE_KIND = {"exr_sequence": "EXR sequence", "image_sequence": "image sequence", "video": "video"}
+INFO_PLATE = ("Original distorted source plate.\n\n"
+              "Used to determine production resolution, frame range, FPS metadata when available, "
+              "and Nuke lens setup.\n\n"
+              "For an image sequence, select any frame from the sequence.")
+INFO_FPS = ("FPS is detected automatically from the original source when available.\n\n"
+            "Image sequences such as JPG or PNG may not contain FPS metadata.\n\n"
+            "If FPS cannot be detected, the default is 24 fps and can be overridden here.")
+PLATE_FILTER = "Original plate (*.exr *.jpg *.jpeg *.png *.tif *.tiff *.dpx *.mov *.mp4 *.avi *.mkv);;All files (*)"
+CHECK_ROWS = ("Tracking Scene", "Camera", "Original Plate", "Flatten", "Frames", "Resolution", "FPS", "Export")
 
 
-def project_configs():
-    """Project configs offered in the dropdown: site config key 'project_configs'
-    (files or folders), plus configs/projects/ inside the Companion.  Listing only."""
-    paths = []
-    try:
-        import site_config
-        extra = site_config._load().get("project_configs") or []
-    except Exception:  # noqa: BLE001 -- a broken site config must not stop the GUI from opening
-        extra = []
-    for p in list(extra) + [os.path.join(ROOT, "configs", "projects")]:
-        p = os.path.expandvars(p)
-        if os.path.isdir(p):
-            paths += [os.path.join(p, f) for f in sorted(os.listdir(p)) if f.endswith(".json")]
-        elif os.path.isfile(p):
-            paths.append(p)
-    out = []
-    for p in paths:
-        try:
-            name = json.load(open(p)).get("name") or os.path.basename(p)
-        except (OSError, ValueError):
-            continue
-        out.append((name, os.path.abspath(p)))
-    return out
+def cli_python():
+    """the console interpreter next to ours (pythonw has no stdout for the CLI)"""
+    exe = sys.executable
+    if os.path.basename(exe).lower() == "pythonw.exe":
+        cand = os.path.join(os.path.dirname(exe), "python.exe")
+        if os.path.exists(cand):
+            return cand
+    return exe
+
+
+def fmt_fps(v):
+    return f"{round(float(v), 3):g}"
 
 
 class CliRunner(QObject):
@@ -88,8 +92,8 @@ class CliRunner(QObject):
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self._read)
         self.proc.finished.connect(self._done)
-        self.line.emit("> " + " ".join([sys.executable, CLI] + args))
-        self.proc.start(sys.executable, [CLI] + args)
+        self.line.emit("> " + " ".join([cli_python(), CLI] + args))
+        self.proc.start(cli_python(), [CLI] + args)
 
     def _read(self):
         for raw in bytes(self.proc.readAllStandardOutput()).decode("utf-8", "replace").splitlines():
@@ -114,7 +118,7 @@ class CliRunner(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, confirm_overwrite=None, extra_env=None):
+    def __init__(self, confirm_overwrite=None, extra_env=None, show_info=None):
         super().__init__()
         self.setWindowTitle(f"AI Tracking Companion {__version__}")
         self.runner = CliRunner(self, extra_env)
@@ -122,73 +126,91 @@ class MainWindow(QMainWindow):
         self.runner.line.connect(self._log)
         self.runner.finished.connect(self._on_finished)
         self.confirm_overwrite = confirm_overwrite or self._ask_overwrite
-        self.mode = None
+        self.show_info = show_info or self._show_info
+        self.mode = None            # detect / check / build while the CLI runs
         self.last_check = None      # last --dry-run result (the CLI's check report)
         self.last_result = None     # last result of any kind
+        self.check_args = None      # arguments the last Check was run with
+        self.fps_override = None    # text typed by the Artist (None = use the detected fps)
+        self.cancel_file = None
+        self.publishing = False
         self._detect_export = ""
         self._build()
+        self._set_state("idle")
 
     # ---------------------------------------------------------------- layout
     def _build(self):
         w = QWidget()
         v = QVBoxLayout(w)
+        title = QLabel("AI Tracking Companion")
+        f = QFont()
+        f.setPointSize(14)
+        f.setBold(True)
+        title.setFont(f)
+        v.addWidget(title)
+
         form = QFormLayout()
-        self.project = QComboBox()
-        for name, path in project_configs():
-            self.project.addItem(name, path)
-        form.addRow("Project", self.project)
         self.input = QLineEdit()
         b = QPushButton("Browse…")
         b.clicked.connect(self._browse_input)
         form.addRow("AI Tracking Folder", self._row(self.input, b))
-        self.input.editingFinished.connect(self.run_detect)
+        self.input.editingFinished.connect(self._input_edited)
+
         self.shot = QLineEdit()
+        self.shot.setPlaceholderText("e.g. demo_sh0010")
         form.addRow("Shot Name", self.shot)
+
+        self.plate = QLineEdit()
+        b = QPushButton("Browse…")
+        b.clicked.connect(self._browse_plate)
+        self.plate_info = self._info_button("Original Plate", INFO_PLATE)
+        form.addRow(self._label_with_info("Original Plate", self.plate_info), self._row(self.plate, b))
+
         self.export = QLineEdit()
         b = QPushButton("Browse…")
         b.clicked.connect(self._browse_export)
         form.addRow("Export Folder", self._row(self.export, b))
+
+        self.fps = QLineEdit()
+        self.fps.setFixedWidth(80)
+        self.fps.editingFinished.connect(self._fps_edited)
+        self.fps_source = QLabel("")
+        self.fps_info = self._info_button("FPS", INFO_FPS)
+        fw = QWidget()
+        fh = QHBoxLayout(fw)
+        fh.setContentsMargins(0, 0, 0, 0)
+        fh.addWidget(self.fps)
+        fh.addWidget(self.fps_source)
+        fh.addStretch()
+        form.addRow(self._label_with_info("FPS", self.fps_info), fw)
+
         self.maya = QCheckBox("Maya")
         self.maya.setChecked(True)
         self.nuke = QCheckBox("Nuke")
         self.nuke.setChecked(True)
-        outs = QHBoxLayout()
-        outs.addWidget(self.maya)
-        outs.addWidget(self.nuke)
-        outs.addWidget(QLabel("(metadata always; Nuke includes lens)"))
-        outs.addStretch()
         ow = QWidget()
-        ow.setLayout(outs)
+        oh = QHBoxLayout(ow)
+        oh.setContentsMargins(0, 0, 0, 0)
+        oh.addWidget(self.maya)
+        oh.addWidget(self.nuke)
+        oh.addWidget(QLabel("Metadata always generated."))
+        oh.addStretch()
         form.addRow("Outputs", ow)
-        # source plate: only shown when the resolver needs the Artist (or an override exists)
-        self.plate = QLineEdit()
-        self.plate_candidates = QComboBox()
-        self.plate_candidates.currentIndexChanged.connect(self._pick_candidate)
-        b = QPushButton("Browse…")
-        b.clicked.connect(self._browse_plate)
-        self.plate_row = QWidget()
-        pr = QHBoxLayout(self.plate_row)
-        pr.setContentsMargins(0, 0, 0, 0)
-        pr.addWidget(self.plate, 3)
-        pr.addWidget(self.plate_candidates, 2)
-        pr.addWidget(b)
-        self.plate_label = QLabel("Source Plate")
-        form.addRow(self.plate_label, self.plate_row)
-        self._show_plate(False)
         v.addLayout(form)
 
         btns = QHBoxLayout()
         self.check_btn = QPushButton("Check")
         self.check_btn.clicked.connect(self.run_check)
-        self.build_btn = QPushButton("Build")
-        self.build_btn.setEnabled(False)
-        self.build_btn.clicked.connect(self.run_build)
+        self.start_btn = QPushButton("Start")
+        self.start_btn.clicked.connect(self.run_build)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.clicked.connect(self.stop)
         btns.addStretch()
-        btns.addWidget(self.check_btn)
-        btns.addWidget(self.build_btn)
+        for x in (self.check_btn, self.start_btn, self.stop_btn):
+            btns.addWidget(x)
         v.addLayout(btns)
 
-        self.status = QLabel("Choose a project and an AI Tracking folder.")
+        self.status = QLabel("Choose the AI Tracking Folder.")
         f = QFont()
         f.setPointSize(13)
         f.setBold(True)
@@ -199,19 +221,19 @@ class MainWindow(QMainWindow):
         self.messages.setTextInteractionFlags(Qt.TextSelectableByMouse)
         v.addWidget(self.messages)
 
-        box = QGroupBox("Detected")
-        self.info = QFormLayout(box)
+        box = QGroupBox("Check")
+        grid = QFormLayout(box)
         self.fields = {}
-        for k in ("Camera", "Camera Model", "Plate", "Flatten", "FPS", "Frames", "Resolution", "Export Path",
-                  "Existing Delivery"):
+        for k in CHECK_ROWS:
             lab = QLabel("-")
             lab.setWordWrap(True)
             lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.fields[k] = lab
-            self.info.addRow(k, lab)
+            grid.addRow(k, lab)
         v.addWidget(box)
 
         self.progress = QLabel("")
+        self.progress.setWordWrap(True)
         v.addWidget(self.progress)
         self.result_box = QGroupBox("Result")
         rl = QVBoxLayout(self.result_box)
@@ -234,11 +256,12 @@ class MainWindow(QMainWindow):
         self.details_btn.toggled.connect(self.log.setVisible)
         v.addWidget(self.details_btn)
         v.addWidget(self.log, 1)
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        v.addWidget(line)
         self.setCentralWidget(w)
-        self.resize(820, 640)
+        self.resize(820, 700)
+        for e in (self.input, self.shot, self.plate, self.export):
+            e.textEdited.connect(self._inputs_changed)
+        for c in (self.maya, self.nuke):
+            c.toggled.connect(self._inputs_changed)
 
     @staticmethod
     def _row(edit, button):
@@ -249,20 +272,47 @@ class MainWindow(QMainWindow):
         h.addWidget(button)
         return w
 
-    def _show_plate(self, on):
-        self.plate_row.setVisible(on)
-        self.plate_label.setVisible(on)
+    def _info_button(self, title, text):
+        b = QToolButton()
+        b.setText("ⓘ")
+        b.setAutoRaise(True)
+        b.setToolTip(title)
+        b.info_text = text
+        b.clicked.connect(lambda: self.show_info(title, text))
+        return b
+
+    @staticmethod
+    def _label_with_info(text, button):
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(QLabel(text))
+        h.addWidget(button)
+        h.addStretch()
+        return w
+
+    # ---------------------------------------------------------------- button states
+    def _set_state(self, state):
+        """idle / running / publishing (Start only after a passing Check of the current inputs)"""
+        running = state in ("running", "publishing")
+        self.check_btn.setEnabled(not running)
+        self.start_btn.setEnabled(state == "idle" and self._check_still_valid())
+        self.stop_btn.setEnabled(state == "running" and self.mode == "build")
+        for x in (self.input, self.shot, self.plate, self.export, self.fps, self.maya, self.nuke):
+            x.setEnabled(not running)
+
+    def _check_still_valid(self):
+        return bool(self.last_check) and self.last_check.get("status") in ("PASS", "WARNING") \
+            and self.check_args == self._common_args()
 
     # ---------------------------------------------------------------- CLI arguments
-    def _project_args(self):
-        return ["--project", self.project.currentData() or "", "--input", self.input.text().strip()]
-
     def _common_args(self):
-        args = self._project_args() + ["--shot", self.shot.text().strip()]
+        args = ["--input", self.input.text().strip(), "--shot", self.shot.text().strip(),
+                "--plate", self.plate.text().strip()]
         if self.export.text().strip():
             args += ["--export", self.export.text().strip()]
-        if not self.plate_row.isHidden() and self.plate.text().strip():
-            args += ["--plate", self.plate.text().strip()]
+        if self.fps_override:
+            args += ["--fps", self.fps_override]
         outs = (["maya"] if self.maya.isChecked() else []) + (["nuke"] if self.nuke.isChecked() else [])
         if outs and outs != ["maya", "nuke"]:  # both = the CLI default (full delivery)
             args += ["--outputs"] + outs
@@ -273,8 +323,8 @@ class MainWindow(QMainWindow):
         if self.runner.busy() or not self.input.text().strip():
             return
         self.mode = "detect"
-        self._set_busy("Detecting…")
-        self.runner.start(self._project_args() + ["--detect"] + (["--shot", self.shot.text().strip()] if self.shot.text().strip() else []))
+        self._busy("Reading the AI Tracking folder…")
+        self.runner.start(["--input", self.input.text().strip(), "--detect"])
 
     def run_check(self):
         if self.runner.busy():
@@ -283,25 +333,40 @@ class MainWindow(QMainWindow):
             self._status("BLOCKED", ["Select at least one output (Maya or Nuke)."])
             return
         self.mode = "check"
-        self._set_busy("Checking…")
+        self._busy("Checking…")
         self.runner.start(self._common_args() + ["--dry-run"])
 
     def run_build(self):
-        if self.runner.busy() or not self.last_check:
+        if self.runner.busy() or not self._check_still_valid():
             return
         args = self._common_args()
-        if self.last_check.get("check", {}).get("existing_delivery"):
+        if (self.last_check.get("check") or {}).get("existing_delivery"):
             if not self.confirm_overwrite():
-                self._status("CANCELLED", ["Existing delivery kept. Build cancelled."])
+                self._status("CANCELLED", ["Existing delivery kept. Nothing was started."])
                 return
             args.append("--overwrite")
+        self.cancel_file = os.path.join(tempfile.gettempdir(), f"ai_tracking_companion_stop_{uuid.uuid4().hex}.flag")
+        args += ["--cancel-file", self.cancel_file]
         self.mode = "build"
+        self.publishing = False
         self.result_box.setVisible(False)
-        self._set_busy("Building…")
+        self._busy("Running…")
         self.runner.start(args)
+
+    def stop(self):
+        """cooperative: ask the CLI to stop at its next safe point; never during publish"""
+        if self.mode != "build" or self.publishing or not self.cancel_file:
+            return
+        open(self.cancel_file, "w").write("stop requested by the Artist\n")
+        self.stop_btn.setEnabled(False)
+        self.status.setText("Stopping… (the current step finishes first)")
 
     # ---------------------------------------------------------------- callbacks
     def _on_stage(self, key):
+        if key == "publish" and self.mode == "build":
+            self.publishing = True
+            self._set_state("publishing")
+            self.status.setText("Finishing publish transaction...")
         names = dict(STAGES)
         done = []
         for k, label in STAGES:
@@ -315,76 +380,101 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, res, code):
         self.last_result = res
-        mode = self.mode
-        self.mode = None
-        self.check_btn.setEnabled(True)
+        mode, self.mode = self.mode, None
+        if self.cancel_file and os.path.exists(self.cancel_file):
+            os.remove(self.cancel_file)
+        self.cancel_file = None
+        self.publishing = False
+        msgs = self._messages(res)
+        st = res.get("status", "FAIL")
         if mode == "detect":
             self._apply_detect(res)
-            if res.get("status") != "BLOCKED" and self.shot.text().strip():
+            self._set_state("idle")
+            if st != "BLOCKED" and self.shot.text().strip() and self.plate.text().strip():
                 self.run_check()
             return
-        msgs = [f"{i['message']}" for i in res.get("issues", [])]
         if mode == "check":
             self.last_check = res
+            self.check_args = self._common_args()
             self._apply_check(res)
-            st = res.get("status", "FAIL")
             self._status(st, msgs)
-            self.build_btn.setEnabled(st in ("PASS", "WARNING"))
         else:
-            st = res.get("status", "FAIL")
+            self.last_check, self.check_args = None, None  # Check again before the next Start
             if st in ("PASS", "WARNING"):
                 self._status("BUILD", msgs)
                 self._show_result(res)
                 self._on_stage("done")
             else:
                 self._status(st, msgs)
-            self.build_btn.setEnabled(False)  # re-check before building again
-            self.last_check = None
+        self._set_state("idle")
+
+    def _inputs_changed(self, *_):
+        if self.mode is None and self.last_check is not None:
+            self._set_state("idle")
+            if not self._check_still_valid() and self.last_check.get("status") in ("PASS", "WARNING"):
+                self.status.setText("Inputs changed. Press Check.")
+                self.status.setStyleSheet("color: #000")
 
     # ---------------------------------------------------------------- presentation only
+    @staticmethod
+    def _messages(res):
+        out = [i["message"] for i in res.get("issues", [])]
+        out += ["ⓘ " + n["message"] for n in res.get("notes", [])]
+        return out
+
     def _apply_detect(self, res):
         d = res.get("detect") or {}
-        if d.get("shot_suggestion") and not self.shot.text().strip():
-            self.shot.setText(d["shot_suggestion"])
         if d.get("export_candidate") and (not self.export.text().strip() or self.export.text() == self._detect_export):
             self.export.setText(d["export_candidate"])
             self._detect_export = d["export_candidate"]
+        if d.get("scene"):
+            self.fields["Tracking Scene"].setText(f"{d['scene']}  ({d.get('hip', '')})")
+            self._log(f"AI Tracking scene {d['scene']}: {d.get('tracking_frames')} tracking frames, "
+                      f"{d.get('tracking_resolution')}")
         if res.get("status") == "BLOCKED":
-            self._status("BLOCKED", [i["message"] for i in res.get("issues", [])])
+            self._status("BLOCKED", self._messages(res))
+        elif not self.shot.text().strip() or not self.plate.text().strip():
+            self.status.setText("Enter the Shot Name and choose the Original Plate, then Check.")
+            self.status.setStyleSheet("color: #000")
+            self.messages.setText("")
 
     def _apply_check(self, res):
         c = res.get("check") or {}
         f = self.fields
+        ok, info = "✓", "ⓘ"
+        for k in CHECK_ROWS:
+            f[k].setText("-")
+        if not c:
+            return
         cam = c.get("camera") or {}
-        f["Camera"].setText(f"{cam.get('scene', '-')}  ({cam.get('hip', '-')})" if cam else "-")
-        f["Camera Model"].setText(c.get("camera_model", "-"))
+        f["Tracking Scene"].setText(f"{ok} {cam.get('scene', '-')}  ({cam.get('hip', '-')})")
+        f["Camera"].setText(f"{ok} Ready  ({c.get('camera_model', '-')})")
         p = c.get("plate") or {}
-        f["Plate"].setText(f"{p.get('path', '-')}  [{p.get('status', '-')}]")
+        f["Original Plate"].setText(f"{ok} {os.path.basename(p.get('path', ''))}  "
+                                    f"({PLATE_KIND.get(p.get('kind'), p.get('kind'))})")
         fl = c.get("flatten") or {}
-        f["Flatten"].setText(f"{fl.get('path') or 'none'}  [{fl.get('mode', '-')}]")
-        f["FPS"].setText(f"{c.get('fps', '-')} ({c.get('fps_source', '-')})" if c else "-")
+        f["Flatten"].setText(f"{ok} AI Tracking flatten (reference)" if fl.get("mode") == "reference_ai_tracking"
+                             else f"{info} not used" if fl.get("mode") == "none" else f"{ok} {fl.get('mode')}")
         fr = c.get("frames") or {}
-        f["Frames"].setText(f"source {fr.get('source')}   tracking {fr.get('tracking')}" if fr else "-")
+        if fr.get("tracking"):
+            a, b = fr["tracking"]
+            f["Frames"].setText(f"{ok} {a}–{b} ({fr.get('count', b - a + 1)} frames)")
+            ti = fr.get("tracking_internal")
+            if ti:
+                self._log(f"Tracking frames {ti[0]}–{ti[1]} = source frames {a}–{b}; plate {fr.get('source')}")
         r = c.get("resolution") or {}
-        f["Resolution"].setText(f"plate {r.get('source')}   production {r.get('production_canvas')}" if r else "-")
-        f["Export Path"].setText(c.get("export_root", "-"))
+        if r.get("source") and r.get("production_canvas"):
+            f["Resolution"].setText(f"{ok} {r['source'][0]}×{r['source'][1]} → "
+                                    f"{r['production_canvas'][0]}×{r['production_canvas'][1]}")
+        src = FPS_SOURCE.get(c.get("fps_source"), c.get("fps_source") or "")
+        if c.get("fps") is not None:
+            f["FPS"].setText(f"{info} {fmt_fps(c['fps'])} ({src})")
+            if not self.fps_override:
+                self.fps.setText(fmt_fps(c["fps"]))
+            self.fps_source.setText(f"Source: {src}")
         ex = c.get("existing_delivery") or []
-        f["Existing Delivery"].setText(f"Existing Delivery Found ({len(ex)} files)" if ex else "none")
-        issues = {i["code"]: i for i in res.get("issues", [])}
-        plate_issue = next((issues[k] for k in PLATE_ISSUES if k in issues), None)
-        show = bool(plate_issue) or p.get("status") == "override"
-        self._show_plate(show)
-        self.plate_candidates.blockSignals(True)
-        self.plate_candidates.clear()
-        if plate_issue and isinstance(plate_issue.get("detail"), list):
-            self.plate_candidates.addItem("— candidates —", "")
-            for cand in plate_issue["detail"]:
-                if cand.get("ok"):
-                    self.plate_candidates.addItem(os.path.basename(cand["pattern"]), cand["pattern"])
-        self.plate_candidates.setVisible(self.plate_candidates.count() > 1)
-        self.plate_candidates.blockSignals(False)
-        if p.get("status") == "override" and not self.plate.text():
-            self.plate.setText(p.get("path", ""))
+        f["Export"].setText(c.get("export_root", "-") + (f"\n{info} Existing Companion delivery ({len(ex)} files)"
+                                                        if ex else ""))
 
     def _show_result(self, res):
         m = res.get("manifest") or {}
@@ -400,43 +490,66 @@ class MainWindow(QMainWindow):
         self.status.setStyleSheet(f"color: {color}")
         self.messages.setText("\n".join(msgs))
 
-    def _set_busy(self, text):
-        self.check_btn.setEnabled(False)
-        self.build_btn.setEnabled(False)
+    def _busy(self, text):
+        self._set_state("running")
         self.status.setText(text)
         self.status.setStyleSheet("color: #000")
+        self.messages.setText("")
         self.progress.setText("")
 
-    # ---------------------------------------------------------------- dialogs
+    # ---------------------------------------------------------------- inputs
+    def _input_edited(self):
+        if self.input.isModified():
+            self.input.setModified(False)
+            self._new_folder()
+
+    def _new_folder(self):
+        self.fps_override = None
+        self.fps.clear()
+        self.fps_source.setText("")
+        self.last_check, self.check_args = None, None
+        for k in CHECK_ROWS:
+            self.fields[k].setText("-")
+        self.run_detect()
+
+    def _fps_edited(self):
+        t = self.fps.text().strip()
+        detected = fmt_fps(((self.last_check or {}).get("check") or {}).get("fps") or 0) if self.last_check else None
+        new = None if (not t or (t == detected and not self.fps_override)) else t
+        if new != self.fps_override:
+            self.fps_override = new
+            if self.input.text().strip() and self.shot.text().strip() and self.plate.text().strip():
+                self.run_check()
+
     def _browse_input(self):
         d = QFileDialog.getExistingDirectory(self, "AI Tracking Folder", self.input.text())
         if d:
             self.input.setText(d)
-            self.shot.clear()
-            self.run_detect()
+            self._new_folder()
 
     def _browse_export(self):
         d = QFileDialog.getExistingDirectory(self, "Export Folder", self.export.text())
         if d:
             self.export.setText(d)
+            self._inputs_changed()
 
     def _browse_plate(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Source Plate (any frame of the sequence, or a video)")
+        start = os.path.dirname(self.plate.text()) if self.plate.text() else self.input.text()
+        f, _ = QFileDialog.getOpenFileName(self, "Original Plate (any frame of the sequence, or a video)", start,
+                                           PLATE_FILTER)
         if f:
             self.plate.setText(f)
-            self.run_check()
-
-    def _pick_candidate(self, i):
-        path = self.plate_candidates.itemData(i)
-        if path:
-            self.plate.setText(path)
-            self.run_check()
+            if self.input.text().strip() and self.shot.text().strip():
+                self.run_check()
 
     def _ask_overwrite(self):
         r = QMessageBox.question(self, "Existing delivery", "Overwrite existing delivery?\n"
                                  "(the current delivery is backed up before it is replaced)",
                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         return r == QMessageBox.Yes
+
+    def _show_info(self, title, text):
+        QMessageBox.information(self, title, text)
 
     def _open_export(self):
         path = ((self.last_result or {}).get("manifest") or {}).get("export_root") or self.export.text()
@@ -448,6 +561,14 @@ def main():
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
+    selftest = os.environ.get("COMPANION_GUI_SELFTEST")  # launcher test: report and quit
+    if selftest:
+        def report():
+            json.dump({"title": w.windowTitle(), "visible": w.isVisible(), "python": sys.executable,
+                       "cli_python": cli_python(), "has_project_field": hasattr(w, "project")},
+                      open(selftest, "w"))
+            app.quit()
+        QTimer.singleShot(500, report)
     sys.exit(app.exec())
 
 

@@ -3,13 +3,22 @@
 | Layer | File | Content | Who edits |
 |---|---|---|---|
 | site | `configs/site.json` (untracked; from `site.example.json`) | tool executables only (hython, mayapy, nuke, ffprobe, ffmpeg, upstream repo) | TD per workstation |
-| project | `<project>.json` (from `configs/project_template.json`) | fps fallback, plate search rules, export rule, shot naming rule, work root | TD per project |
+| project (optional preset) | `<project>.json` (from `configs/project_template.json`) | fps fallback, plate search rules, export rule, shot naming rule, work root | TD per project |
 | shot | generated per build (resolver / GUI) | resolved paths, detected facts, artist overrides, build provenance | the tool (Artist via GUI) |
 
-## Site keys used by the GUI
-- `project_configs`: list of project config files or folders (every `*.json` in a folder) shown in
-  the GUI's Project dropdown. `configs/projects/` inside the Companion is listed as well.
-  Machine specific, so it lives in the untracked `site.json`.
+**Project configs are an optional convenience preset**, not a workflow dependency. The Artist
+GUI does not use them (direct mode: AI Tracking Folder, Shot Name, Original Plate, Export Folder).
+They stay for the CLI (`--project`), regression, batch / pipeline integration and a possible
+future Advanced / Preset option.
+
+## Direct mode (GUI) defaults
+| Item | Rule |
+|---|---|
+| export folder | `<AI Tracking folder>/export` unless given; created if missing, never cleared |
+| fps | original plate metadata (video / EXR header) → 24 (Default, information only) → Artist override |
+| flatten | AI Tracking flatten as Nuke reference when it is in the production space, otherwise not used (WARNING) |
+| work folder | `<Companion>/work/<shot>`; site key `work_root` or env `COMPANION_WORK_ROOT` overrides |
+| backups | `backup_keep` 2 |
 
 ## Project keys (summary)
 | Key | Default | Meaning |
@@ -24,6 +33,7 @@
 
 A shot config may set `options.backup_keep` the same way.
 
-## Artist overrides
-A source plate chosen in the GUI (or `--plate`) is stored in `<work_root>/<shot>/<shot>.shot.json`
-and reused next time; it is validated again on every Check / build.
+## Artist overrides (project mode)
+A source plate given with `--plate` in project mode is stored in `<work_root>/<shot>/<shot>.shot.json`
+and reused next time; it is validated again on every Check / build. In direct mode the Artist
+names the Original Plate on every run (it is recorded in the build provenance).
