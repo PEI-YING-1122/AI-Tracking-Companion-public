@@ -1,9 +1,30 @@
 # AI Tracking Companion
 
-Independent companion tool for **[chordee/colmap-camera-tracking](https://github.com/chordee/colmap-camera-tracking)** ("AI Tracking").
+Independent companion utility for
+**[chordee/colmap-camera-tracking](https://github.com/chordee/colmap-camera-tracking)** ("AI Tracking").
 
-AI Tracking solves the camera. The Companion takes over from a **finished** AI Tracking
-output and builds the production delivery for Maya and Nuke:
+> **Important:** this project does not modify the upstream AI Tracking repository. It is not a
+> fork and not an official part of AI Tracking: it reads the results AI Tracking produces and
+> builds a Maya / Nuke production delivery from them.
+
+**Windows Release: v0.2.0**
+
+## Features
+- Maya camera delivery — Alembic primary, FBX + sidecar fallback (corrected film offset, full-resolution intrinsics)
+- Maya point cloud delivery — NPZ + Maya-native particle loader (camera, image plane, point cloud in one call)
+- Full-resolution lens STMaps — undistort / converged redistort on the production canvas
+- Nuke lens setup — Artist undistort / redistort handoff
+- Artist GUI — AI Tracking Folder, Shot Name, Original Plate, Export Folder; Check / Start / Stop
+- Transactional build / rollback — stage, validate, publish; backups and exact rollback
+- FPS detection / override — video metadata or EXR header, default 24, Artist override
+
+## Basic flow
+```
+AI Tracking result  +  Original Plate  +  Shot Name
+                          |
+                          v
+        Maya / Nuke delivery  (export/lens, maya, metadata, nuke)
+```
 
 | Delivery | Files (`<shot>` = Artist shot name) |
 |---|---|
@@ -71,6 +92,14 @@ configs/           site / project / shot templates
 docs/              documentation
 ```
 
-## License / relation to upstream
-This repository contains only Companion code. It does not include AI Tracking source code,
-COLMAP, or any project data.
+## Upstream attribution
+AI Tracking — <https://github.com/chordee/colmap-camera-tracking> — is a separate project by its
+own authors. AI Tracking Companion is an independent tool: it does not fork, vendor or modify the
+upstream source and is not affiliated with or endorsed by it. It uses the results an AI Tracking
+installation produces (and, read only, its lens canvas rule from the installed copy) to build the
+Maya / Nuke production delivery. Upstream behaviours that affect the Companion are recorded in
+`docs/known_upstream_behavior.md` (reported, never patched).
+
+## License
+No license has been chosen yet. This repository contains only Companion
+code: no AI Tracking source code, no COLMAP, no project data.
