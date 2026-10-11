@@ -40,7 +40,7 @@ def main():
     a = ap.parse_args()
     if git("status", "--porcelain").strip():
         sys.exit("working tree is not clean: commit first (the package must equal a commit)")
-    commit = git("rev-parse", "--short", a.ref).strip()
+    commit = git("rev-parse", "--short", a.ref + "^{commit}").strip()
     files = [f for f in git("ls-tree", "-r", "--name-only", a.ref).splitlines()
              if f in INCLUDE_FILES or (f.startswith(INCLUDE_DIRS) and not f.endswith((".pyc", ".pyo")))]
     missing = sorted(INCLUDE_FILES - set(files))
