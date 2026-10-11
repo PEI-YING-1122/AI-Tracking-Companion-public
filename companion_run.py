@@ -280,7 +280,10 @@ def build(cfg_path, a, record, generated_cfg=None):
         finals += [O["production_flatten"] % f for f in flat_frames]
     present = bt.existing_targets(finals)
     if present and not a.overwrite:
-        raise bt.BuildStop(bt.CANCELLED, "outputs_exist", "delivery already exists -- rerun with --overwrite (old files are backed up)", present)
+        if a.dry_run:  # a check reports it; only a real build is cancelled
+            record.issue(bt.WARNING, "outputs_exist", "delivery already exists -- a build needs --overwrite (old files are backed up)", present)
+        else:
+            raise bt.BuildStop(bt.CANCELLED, "outputs_exist", "delivery already exists -- rerun with --overwrite (old files are backed up)", present)
     record.step("preflight", bt.PASS, time.time() - t, outputs=sorted(outputs | {"metadata"}))
     if a.dry_run:
         print(json.dumps(R, indent=1))
@@ -521,6 +524,8 @@ def main():
         record.issue(e.level, e.code, e.message, e.detail)
     except path_resolver.ConfigError as e:
         record.issue(bt.BLOCKED, "config", str(e))
+    except project_config.ProjectConfigError as e:
+        record.issue(bt.BLOCKED, "project_config", str(e))
     except Exception as e:  # noqa: BLE001 -- any runtime error is a FAIL, never a silent success
         record.issue(bt.FAIL, "exception", f"{type(e).__name__}: {e}", traceback.format_exc())
     if record.build_dir is None:  # failed before a build folder existed
