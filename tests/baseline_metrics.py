@@ -59,8 +59,25 @@ def same(a, b):
     return a == b
 
 
+def _volatile_sizes(d):
+    """Manifest byte counts that legitimately change between identical builds:
+    the FBX embeds a CreationTimeStamp (millisecond digits vary) and metadata embeds
+    companion_version / build ids.  Their sum (export_bytes_added) follows.  Every
+    other file size (STMaps, ABC, NPZ, loader, .nk) is still compared byte for byte."""
+    vol = set()
+    for k, v in d.items():
+        m = re.match(r"^(.*_companion_manifest\.json)\.files\[(\d+)\]\.key$", k)
+        if m and v in ("maya_cam_fbx", "metadata"):
+            vol.add(f"{m.group(1)}.files[{m.group(2)}].bytes")
+            vol.add(f"{m.group(1)}.export_bytes_added")
+    return vol
+
+
 def compare(a_path, b_path):
     a, b = json.load(open(a_path)), json.load(open(b_path))
+    vol = _volatile_sizes(a) | _volatile_sizes(b)
+    a = {k: v for k, v in a.items() if k not in vol}
+    b = {k: v for k, v in b.items() if k not in vol}
     only_a = sorted(set(a) - set(b))
     only_b = sorted(set(b) - set(a))
     diff = sorted(k for k in set(a) & set(b) if not same(a[k], b[k]))
