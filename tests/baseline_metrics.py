@@ -1,12 +1,15 @@
 """Regression baseline: capture / compare every result JSON of the regression suites.
 
     python tests/baseline_metrics.py capture <out_baseline.json> [--extra <baseline shot work dir>]
-    python tests/baseline_metrics.py compare <baseline.json> <candidate.json>
+    python tests/baseline_metrics.py compare <baseline.json> <candidate.json> [<result.json>] [--intended <changes.json>]
 
 All numeric and string leaves of <test data>/results/*.json (+ the baseline shot's
 verify / manifest) are flattened to "file:path.to.leaf" -> value.  Volatile leaves
 (timings, timestamps, versions, build ids, absolute work paths) are excluded.
 Numbers must match to 1e-9 relative (the pipeline is deterministic); strings exactly.
+--intended: a reviewed list of key patterns that a release changed ON PURPOSE (each with its
+reason).  Differences / missing keys on those keys are reported separately as "intended";
+every other difference still fails the compare.
 """
 import glob
 import json
@@ -22,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import migrate_test_data  # noqa: E402
 # result files ABOUT the regression (summaries, comparisons): not regression values themselves
-META = re.compile(r"^(baseline_compare.*|run_all_summary.*|compare_.*)\.json$")
+META = re.compile(r"^(baseline_compare.*|run_all_summary.*|compare_.*|test_v021_fixes.*|test_v021_test2.*)\.json$")
 VOLATILE = re.compile(r"(seconds|elapsed|created|companion_version|build_id|nuke_log|stdout|stderr|msg|"
                       r"maya_msg|stmap_msg|_time|timestamp|work_dir|work_bytes|work_mb|config$|manifest_error|"
                       r"\.relocation\.target|project_directory_eval|relocation\.drive|\.error$)", re.I)
@@ -139,7 +142,7 @@ def _normalise(d):
     return out
 
 
-def compare(a_path, b_path):
+def compare(a_path, b_path, intended_path=None):
     a, b = json.load(open(a_path, encoding="utf-8")), json.load(open(b_path, encoding="utf-8"))
     is_meta = lambda k: bool(META.match(k.split(".json", 1)[0] + ".json"))  # noqa: E731
     a = {k: v for k, v in a.items() if not is_meta(k) and not VOLATILE.search(k)}
@@ -150,11 +153,21 @@ def compare(a_path, b_path):
     only_a = sorted(set(a) - set(b))
     only_b = sorted(set(b) - set(a))
     diff = sorted(k for k in set(a) & set(b) if not same(a[k], b[k]))
+    rules = json.load(open(intended_path, encoding="utf-8"))["changes"] if intended_path else []
+    pats = [(re.compile(r["pattern"]), r["reason"]) for r in rules]
+
+    def why(k):
+        return next((r for p, r in pats if p.search(k)), None)
+    intended = [{"key": k, "baseline": a[k], "candidate": b.get(k, "<missing>"), "reason": why(k)}
+                for k in diff + only_a if why(k)]
+    diff = [k for k in diff if not why(k)]
+    only_a = [k for k in only_a if not why(k)]
     res = {"baseline_values": len(a), "candidate_values": len(b), "compared": len(set(a) & set(b)),
            "different": len(diff), "missing_in_candidate": len(only_a), "new_in_candidate": len(only_b),
-           "identical": not diff and not only_a,
+           "intended_changes": len(intended), "identical_except_intended": not diff and not only_a,
+           "identical": not diff and not only_a and not intended,
            "diff_samples": [{"key": k, "baseline": a[k], "candidate": b[k]} for k in diff[:40]],
-           "missing_samples": only_a[:20], "new_samples": only_b[:20]}
+           "missing_samples": only_a[:20], "new_samples": only_b[:20], "intended": intended}
     print(json.dumps(res, indent=1, default=str))
     return res
 
@@ -164,7 +177,13 @@ if __name__ == "__main__":
         extras = sys.argv[sys.argv.index("--extra") + 1:] if "--extra" in sys.argv else []
         capture(sys.argv[2], extras)
     else:
-        r = compare(sys.argv[2], sys.argv[3])
-        if len(sys.argv) > 4:
-            json.dump(r, open(sys.argv[4], "w", encoding="utf-8"), indent=1, default=str)
-        sys.exit(0 if r["identical"] else 1)
+        args = sys.argv[2:]
+        intended = None
+        if "--intended" in args:
+            i = args.index("--intended")
+            intended = args[i + 1]
+            del args[i:i + 2]
+        r = compare(args[0], args[1], intended)
+        if len(args) > 2:
+            json.dump(r, open(args[2], "w", encoding="utf-8"), indent=1, default=str)
+        sys.exit(0 if r["identical_except_intended"] else 1)

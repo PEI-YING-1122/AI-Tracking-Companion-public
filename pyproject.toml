@@ -1,6 +1,6 @@
 [project]
 name = "ai-tracking-companion"
-version = "0.2.0"
+version = "0.2.1"
 description = "Independent companion for chordee/colmap-camera-tracking: production lens (STMap), Maya and Nuke delivery from finished AI Tracking results."
 readme = "README.md"
 requires-python = ">=3.11"

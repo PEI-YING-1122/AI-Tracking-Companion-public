@@ -18,13 +18,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "common"))
 from version import __version__  # noqa: E402
 
-INCLUDE_FILES = {"AI_Tracking_Companion.bat", "setup.bat", "requirements-lock.txt", "pyproject.toml", "README.md",
+INCLUDE_FILES = {"AI_Tracking_Companion.bat", "Configure_Companion.bat", "setup.bat", "requirements-lock.txt", "pyproject.toml", "README.md",
                  "QUICK_START.md", "CHANGELOG.md", "companion_run.py",
                  "configs/site.example.json", "configs/project_template.json", "configs/shot_template.json",
                  # validation used by every build (imported / started by companion_run)
                  "tests/verify_shot.py", "tests/test_01_validate.py", "tests/maya_loader_check.py",
                  "docs/gui.md", "docs/configuration.md", "docs/known_upstream_behavior.md",
-                 "docs/RELEASE_NOTES_v0.2.0.md", "docs/DEPLOYMENT_TEST_v0.2.0.md"}
+                 "docs/RELEASE_NOTES_v0.2.0.md", "docs/DEPLOYMENT_TEST_v0.2.0.md",
+                 "docs/RELEASE_NOTES_v0.2.1.md", "docs/DEPLOYMENT_TEST_v0.2.1.md"}
 INCLUDE_DIRS = ("common/", "gui/", "stmap/", "maya_export/", "nuke_package/")
 
 

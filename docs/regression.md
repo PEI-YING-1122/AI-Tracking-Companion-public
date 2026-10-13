@@ -16,6 +16,15 @@ python tests/run_all.py [--skip-poc] [--skip-gui]
 
 `v0.1.0.json` holds every numeric / string result leaf (timings, versions, build ids, work
 paths and work sizes excluded); numbers must match to 1e-9. New values are allowed.
+It was measured on the production baseline shot, so it is **private test data** and not in git:
+`<root>/baselines_private/v0.1.0.json`. Without it `run_all` reports the compare as
+`NOT RUN` and exits with 3. The GUI suite reads the shot's expected Check values from
+`baseline.expected` in `tests/local_test_config.json` (also private).
+
+Exit codes of `run_all.py` and the v0.2.1 suites: `0` all run and passed, `1` failure,
+`3` everything that ran passed but something was NOT RUN (missing private fixture / test data).
+Without any test data, `tests/test_release.py` and the fixture-free parts of
+`tests/test_v021_fixes.py` / `tests/test_v021_test2.py` still run (the rest is listed as NOT RUN).
 
 ## Test data (outside the repository)
 Set `COMPANION_TEST_DATA` or copy `tests/local_test_config.example.json` to
@@ -25,6 +34,7 @@ Set `COMPANION_TEST_DATA` or copy `tests/local_test_config.example.json` to
 <root>/workflow/   mock projects A / B / C and their project configs, scratch work
 <root>/baseline/   demo_sh0010 configs + Companion work (the shot's media stay in the project)
 <root>/results/    result JSON read by the baseline compare
+<root>/baselines_private/  frozen v0.1.0 baselines (production shot measurements; private)
 <root>/manual_qc/  archive (no test uses it)
 <root>/fixture_origins.json
 ```

@@ -7,7 +7,7 @@ Independent companion utility for
 > fork and not an official part of AI Tracking: it reads the results AI Tracking produces and
 > builds a Maya / Nuke production delivery from them.
 
-**Windows Release: v0.2.0**
+**Windows Release: v0.2.1**
 
 ## Features
 - Maya camera delivery — Alembic primary, FBX + sidecar fallback (corrected film offset, full-resolution intrinsics)
@@ -39,13 +39,21 @@ AI Tracking result  +  Original Plate  +  Shot Name
 - It does **not** save the AI Tracking `.hip` (camera fixes happen in memory only).
 
 ## Status
-`v0.2.0` — **Production Release**: Artist GUI + transactional builder on the frozen
-`v0.1.0` core (Core Production Baseline, regression-locked, see `docs/regression.md`).
-Release notes: `docs/RELEASE_NOTES_v0.2.0.md`, changes: `CHANGELOG.md`, Artist steps: `QUICK_START.md`.
+`v0.2.1` — **Workstation setup and compatibility fixes** on `v0.2.0` (Production Release: Artist GUI +
+transactional builder on the frozen `v0.1.0` core, regression-locked, see `docs/regression.md`).
+Release notes: `docs/RELEASE_NOTES_v0.2.1.md` (and `_v0.2.0`), changes: `CHANGELOG.md`, Artist
+steps: `QUICK_START.md`.
 
 ## Requirements / setup
-- Windows x64; AI Tracking installation, Houdini (hython), Maya (mayapy), Nuke, ffprobe —
-  locations in `configs/site.json` (created from `configs/site.example.json`).
+- Windows x64; AI Tracking installation, Houdini (hython), Maya (mayapy), Nuke, ffmpeg / ffprobe —
+  locations in `configs/site.json`, written by **Workstation Setup** (`Configure_Companion.bat`:
+  detects the installed tools, Nuke target = lowest installed **supported** Nuke (13.0–17.x) by default, validates
+  before saving). TDs may still edit it by hand (`configs/site.example.json`).
+- **Install on a local disk** (e.g. `C:\Tools\AI_Tracking_Companion_v0.2.x` or
+  `D:\Tools\AI_Tracking_Companion_v0.2.x`). Not a mapped network drive, NAS or restricted share:
+  uv's managed Python cannot create its runtime there (`Access denied (os error 5)`), and
+  `setup.bat` stops with "Companion runtime must be installed on a local disk." Administrator
+  rights are not a workaround.
 - Python environment: run `setup.bat` once per workstation. It uses uv (`tools\uv.exe` or uv on
   PATH) to create `.python\` (Python 3.11.14) and `.venv\` (`requirements-lock.txt`) inside the
   Companion folder; nothing system-wide. A `.venv` copied from another computer does not work

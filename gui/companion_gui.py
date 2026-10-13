@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QFormLayout
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "common"))
 from version import __version__  # noqa: E402
+import workstation  # noqa: E402
 
 CLI = os.path.join(ROOT, "companion_run.py")
 STAGES = [("preflight", "Preflight"), ("resolve", "Resolving"), ("lens", "Building Lens"),
@@ -37,7 +38,8 @@ STATUS_STYLE = {"PASS": ("Ready", "#2e7d32"), "WARNING": ("Ready (warnings)", "#
                 "CANCELLED": ("Cancelled", "#555555"), "BUILD": ("BUILD COMPLETE", "#2e7d32")}
 FPS_SOURCE = {"ffprobe": "Video Metadata", "exr_header": "EXR Header", "default": "Default",
               "artist_override": "Artist Override", "project_config": "Project Setting"}
-PLATE_KIND = {"exr_sequence": "EXR sequence", "image_sequence": "image sequence", "video": "video"}
+PLATE_KIND = {"exr_sequence": "EXR sequence", "jpg_sequence": "JPG sequence", "png_sequence": "PNG sequence",
+              "image_sequence": "image sequence", "video": "video"}
 INFO_PLATE = ("Original distorted source plate.\n\n"
               "Used to determine production resolution, frame range, FPS metadata when available, "
               "and Nuke lens setup.\n\n"
@@ -46,7 +48,23 @@ INFO_FPS = ("FPS is detected automatically from the original source when availab
             "Image sequences such as JPG or PNG may not contain FPS metadata.\n\n"
             "If FPS cannot be detected, the default is 24 fps and can be overridden here.")
 PLATE_FILTER = "Original plate (*.exr *.jpg *.jpeg *.png *.tif *.tiff *.dpx *.mov *.mp4 *.avi *.mkv);;All files (*)"
-CHECK_ROWS = ("Tracking Scene", "Camera", "Original Plate", "Flatten", "Frames", "Resolution", "FPS", "Export")
+CHECK_ROWS = ("Tracking Scene", "Camera", "Original Plate", "Flatten", "Frames", "Resolution", "FPS", "Nuke Generator",
+              "Export")
+
+
+def flatten_text(fl):
+    """Check row text for the AI Tracking flatten (the CLI decides the status)"""
+    st = fl.get("status")
+    if fl.get("mode") == "reference_ai_tracking" and st == "reference_compatible":
+        d = max(abs(x) for x in (fl.get("pp_delta_px") or [0, 0]))
+        return f"ⓘ Tracking Flatten: Reference Only (principal point Δ {d:.4f} px)"
+    if fl.get("mode") == "reference_ai_tracking":
+        return "✓ AI Tracking flatten (reference)"
+    if st == "incompatible":
+        return "⚠ Tracking flatten is incompatible and was not used"
+    if fl.get("mode") == "none":
+        return "ⓘ not used"
+    return f"✓ {fl.get('mode')}"
 
 
 def cli_python():
@@ -118,7 +136,7 @@ class CliRunner(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, confirm_overwrite=None, extra_env=None, show_info=None):
+    def __init__(self, confirm_overwrite=None, extra_env=None, show_info=None, open_setup=None):
         super().__init__()
         self.setWindowTitle(f"AI Tracking Companion {__version__}")
         self.runner = CliRunner(self, extra_env)
@@ -135,8 +153,11 @@ class MainWindow(QMainWindow):
         self.cancel_file = None
         self.publishing = False
         self._detect_export = ""
+        self.open_setup_window = open_setup or self._open_setup_window
+        self.setup_window = None
         self._build()
         self._set_state("idle")
+        self.refresh_workstation()
 
     # ---------------------------------------------------------------- layout
     def _build(self):
@@ -148,6 +169,18 @@ class MainWindow(QMainWindow):
         f.setBold(True)
         title.setFont(f)
         v.addWidget(title)
+
+        self.setup_box = QGroupBox("Workstation Setup Required")   # first run / broken site.json only
+        sl = QVBoxLayout(self.setup_box)
+        self.setup_text = QLabel("")
+        self.setup_text.setWordWrap(True)
+        self.setup_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        sl.addWidget(self.setup_text)
+        self.configure_btn = QPushButton("Configure")
+        self.configure_btn.clicked.connect(self.open_setup)
+        sl.addWidget(self.configure_btn, 0, Qt.AlignLeft)
+        self.setup_box.setStyleSheet("QGroupBox { color: #c62828; font-weight: bold; }")
+        v.addWidget(self.setup_box)
 
         form = QFormLayout()
         self.input = QLineEdit()
@@ -247,6 +280,9 @@ class MainWindow(QMainWindow):
         self.result_box.setVisible(False)
         v.addWidget(self.result_box)
 
+        self.setup_btn = QToolButton()
+        self.setup_btn.setText("Workstation Setup…")
+        self.setup_btn.clicked.connect(self.open_setup)
         self.details_btn = QToolButton()
         self.details_btn.setText("Details / Log")
         self.details_btn.setCheckable(True)
@@ -254,7 +290,11 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setVisible(False)
         self.details_btn.toggled.connect(self.log.setVisible)
-        v.addWidget(self.details_btn)
+        bottom = QHBoxLayout()
+        bottom.addWidget(self.details_btn)
+        bottom.addStretch()
+        bottom.addWidget(self.setup_btn)
+        v.addLayout(bottom)
         v.addWidget(self.log, 1)
         self.setCentralWidget(w)
         self.resize(820, 700)
@@ -452,9 +492,11 @@ class MainWindow(QMainWindow):
         p = c.get("plate") or {}
         f["Original Plate"].setText(f"{ok} {os.path.basename(p.get('path', ''))}  "
                                     f"({PLATE_KIND.get(p.get('kind'), p.get('kind'))})")
-        fl = c.get("flatten") or {}
-        f["Flatten"].setText(f"{ok} AI Tracking flatten (reference)" if fl.get("mode") == "reference_ai_tracking"
-                             else f"{info} not used" if fl.get("mode") == "none" else f"{ok} {fl.get('mode')}")
+        f["Flatten"].setText(flatten_text(c.get("flatten") or {}))
+        ng = c.get("nuke_generator")
+        f["Nuke Generator"].setText(f"{info} {ng.get('version') or '?'}" if ng else "- (Nuke not selected)")
+        if ng:
+            self._log(f"Nuke Generator: {ng.get('version')}  ({ng.get('path')})")
         fr = c.get("frames") or {}
         if fr.get("tracking"):
             a, b = fr["tracking"]
@@ -475,6 +517,31 @@ class MainWindow(QMainWindow):
         ex = c.get("existing_delivery") or []
         f["Export"].setText(c.get("export_root", "-") + (f"\n{info} Existing Companion delivery ({len(ex)} files)"
                                                         if ex else ""))
+
+    # ---------------------------------------------------------------- workstation
+    def refresh_workstation(self):
+        """first-run check: site.json missing / placeholder / tools not found -> 'Workstation Setup Required'"""
+        st = workstation.status()
+        self.workstation = st
+        probs = [p["message"] for p in st["problems"]]
+        if st["companion_on_network_drive"]:
+            probs.append("The Companion runs from a network drive. Install it on a local disk "
+                         "(e.g. C:\\Tools\\AI_Tracking_Companion_v0.2.x).")
+        self.setup_text.setText("\n".join("• " + p for p in probs))
+        self.setup_box.setVisible(bool(probs))
+        if not self.last_check:  # before a Check: what the site configuration says
+            self.fields["Nuke Generator"].setText(f"ⓘ {st['nuke_version']}" if st["nuke_version"] and not any(
+                p["key"] == "nuke" for p in st["problems"]) else "-")
+        return st
+
+    def open_setup(self):
+        self.open_setup_window(self)
+
+    def _open_setup_window(self, _parent):
+        import workstation_setup
+        self.setup_window = workstation_setup.SetupWindow(on_saved=lambda _p: self.refresh_workstation())
+        self.setup_window.show()
+        self.setup_window.raise_()
 
     def _show_result(self, res):
         m = res.get("manifest") or {}

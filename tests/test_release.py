@@ -64,13 +64,14 @@ def main():
     ok("gui_title_version", w.windowTitle() == f"AI Tracking Companion {__version__}", title=w.windowTitle())
     del app
 
-    for b in ("AI_Tracking_Companion.bat", "setup.bat"):
+    for b in ("AI_Tracking_Companion.bat", "Configure_Companion.bat", "setup.bat"):
         data = open(os.path.join(ROOT, b), "rb").read()
         ok(f"{b}_crlf", b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b""))
 
     if pkg:
-        need = ["AI_Tracking_Companion.bat", "setup.bat", "requirements-lock.txt", "QUICK_START.md", "companion_run.py",
-                "gui/companion_gui.py", "gui/launch.py", "common/version.py", "common/site_config.py",
+        need = ["AI_Tracking_Companion.bat", "Configure_Companion.bat", "setup.bat", "requirements-lock.txt",
+                "QUICK_START.md", "companion_run.py", "gui/companion_gui.py", "gui/launch.py", "gui/workstation_setup.py",
+                "common/version.py", "common/site_config.py", "common/workstation.py",
                 "stmap/stmap_core.py", "stmap/stmap_generator.py", "maya_export/run_maya_export.py",
                 "maya_export/hython_export.py", "maya_export/shot_loader_template.py",
                 "nuke_package/build_nuke_package.py", "nuke_package/check_nuke_setup.py",

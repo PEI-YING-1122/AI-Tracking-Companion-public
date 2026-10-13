@@ -85,14 +85,48 @@ def probe_video(path):
     }
 
 
-def _list_seq(d):
+# image-sequence kinds -> extensions (matched case-insensitively); order = folder precedence
+SEQ_KINDS = (("exr_sequence", (".exr",)), ("jpg_sequence", (".jpg", ".jpeg")), ("png_sequence", (".png",)))
+SEQ_EXTS = {e for _, exts in SEQ_KINDS for e in exts}
+PATTERN_RE = re.compile(r"%0?(\d*)d|(#+)")
+
+
+def seq_kind(path):
+    ext = os.path.splitext(path)[1].lower()
+    return next((k for k, exts in SEQ_KINDS if ext in exts), None)
+
+
+def pattern_files(pattern):
+    """Files of one padded sequence: 'dir/shot_%04d.png' (or ####) -> [(frame, path)], sorted.
+    Only names of exactly that prefix / padding / extension (extension case-insensitive), so other
+    sequences in the same folder are never mixed in."""
+    d, base = os.path.split(pattern)
+    m = PATTERN_RE.search(base)
+    if not m or not os.path.isdir(d):
+        return []
+    pad = len(m.group(2)) if m.group(2) else int(m.group(1) or 0)
+    pre, ext = base[:m.start()], base[m.end():]
+    digits = rf"(\d{{{pad}}})" if pad else r"(\d+)"
+    rx = re.compile(rf"^{re.escape(pre)}{digits}{re.escape(ext)}$", re.I) if ext else None
+    out = []
+    for n in os.listdir(d):
+        mm = rx.match(n) if rx else None
+        if mm and os.path.isfile(os.path.join(d, n)):
+            out.append((int(mm.group(1)), os.path.join(d, n)))
+    return sorted(out)
+
+
+def _list_seq(d, pattern=None):
+    if pattern:
+        items = pattern_files(pattern)
+        files = [p for _, p in items]
+        kind = seq_kind(pattern)
+        return (kind, files) if kind and files else (None, [])
     files = sorted(os.path.join(d, n) for n in os.listdir(d) if os.path.isfile(os.path.join(d, n)))
-    exr = [f for f in files if f.lower().endswith(".exr")]
-    jpg = [f for f in files if os.path.splitext(f)[1].lower() in (".jpg", ".jpeg")]
-    if exr:  # same precedence as autotracker._sequence_kind
-        return "exr_sequence", exr
-    if jpg:
-        return "jpg_sequence", jpg
+    for kind, exts in SEQ_KINDS:  # EXR before JPG: same precedence as autotracker._sequence_kind
+        hits = [f for f in files if os.path.splitext(f)[1].lower() in exts]
+        if hits:
+            return kind, hits
     return None, []
 
 
@@ -118,15 +152,15 @@ def exr_header_fps(path):
     return None
 
 
-def probe_sequence(d):
+def probe_sequence(d, pattern=None):
     import cv2  # OPENCV_IO_ENABLE_OPENEXR set by caller
-    kind, files = _list_seq(d)
+    kind, files = _list_seq(d, pattern)
     if not files:
-        raise UnsupportedScene(f"No EXR/JPG frames in {d}")
+        raise UnsupportedScene(f"No supported image-sequence frames (EXR/JPG/JPEG/PNG) found in {pattern or d}")
     img = cv2.imread(files[0], cv2.IMREAD_UNCHANGED)
     if img is None:
         raise UnsupportedScene(f"Cannot read first source frame {files[0]}")
-    nums = [frame_number(f) for f in files]
+    nums = [n for n, _ in pattern_files(pattern)] if pattern else [frame_number(f) for f in files]
     fr = exr_header_fps(files[0]) if kind == "exr_sequence" else None
     return kind, files, {
         "width": int(img.shape[1]),
@@ -154,7 +188,9 @@ def read_cameras_txt(path):
     return cams
 
 
-def build_meta(scene_dir, source, transforms_json=None, undist_json=None):
+def build_meta(scene_dir, source, transforms_json=None, undist_json=None, source_pattern=None):
+    """source: video file or sequence folder.  source_pattern ('dir/shot_%04d.png'): only that
+    sequence of the folder (the Artist's plate); without it the folder's frames by kind precedence."""
     import cv2  # noqa: F401  (needed by probe_sequence)
     scene_dir = os.path.abspath(scene_dir)
     scene = os.path.basename(scene_dir)
@@ -212,8 +248,10 @@ def build_meta(scene_dir, source, transforms_json=None, undist_json=None):
         src = probe_video(source)
         src_files, src_nums = None, None
     elif os.path.isdir(source):
-        kind, src_files, src = probe_sequence(source)
+        kind, src_files, src = probe_sequence(source, source_pattern)
         src_nums = src.pop("_nums")
+        if source_pattern:
+            src["pattern"] = source_pattern.replace("\\", "/")
     else:
         raise UnsupportedScene(f"Unrecognised source: {source}")
 

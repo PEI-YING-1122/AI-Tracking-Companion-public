@@ -88,7 +88,8 @@ def _nuke(R, plate, out_dir, smeta, meta):
     expected_nodes = {"BD_SOURCE", "BD_UNDISTORT", "BD_REDISTORT", "LENS_INFO", "READ_ORIGINAL_PLATE", "CROP_BLACK_OUTSIDE",
                       "READ_STMAP_UNDISTORT", "APPLY_UNDISTORT", "READ_STMAP_REDISTORT", "APPLY_REDISTORT"}
     if has_ref:
-        expected_nodes.add("TRACKING_REFERENCE_FLATTEN")
+        expected_nodes |= {"TRACKING_REFERENCE_FLATTEN", "BD_TRACKING_REFERENCE"}
+    consumers_of_ref = sorted(k for k, v in nodes.items() if "TRACKING_REFERENCE_FLATTEN" in (v.get("inputs") or []))
     off = meta["tracking"]["frame_offset_tracking_to_source"] or 0
     ref_files = reads.get("TRACKING_REFERENCE_FLATTEN", {}).get("files_at", {})
     res = {"rc": r.returncode, "root": chk.get("root"), "nodes": sorted(nodes), "read_errors": chk.get("read_errors"),
@@ -97,7 +98,8 @@ def _nuke(R, plate, out_dir, smeta, meta):
            "crop": {k: nodes.get("CROP_BLACK_OUTSIDE", {}).get(k) for k in ("inputs",)},
            "apply_undistort_inputs": nodes.get("APPLY_UNDISTORT", {}).get("inputs"),
            "apply_redistort_inputs": nodes.get("APPLY_REDISTORT", {}).get("inputs"),
-           "apply_redistort_label": nodes.get("APPLY_REDISTORT", {}).get("label")}
+           "apply_redistort_label": nodes.get("APPLY_REDISTORT", {}).get("label"),
+           "tracking_reference_label": nodes.get("TRACKING_REFERENCE_FLATTEN", {}).get("label")}
     checks = {
         "nuke_opens_clean": r.returncode == 0 and chk.get("read_errors") == []
                             and all(all(v.get("file_exists_at", {}).values()) for k, v in reads.items() if k != "TRACKING_REFERENCE_FLATTEN"),
@@ -107,9 +109,13 @@ def _nuke(R, plate, out_dir, smeta, meta):
                      and abs(chk.get("root", {}).get("fps", 0) - meta["source"]["fps"]) < 1e-6,
         "nuke_formats": res["undistort_format"] == [W, H] and res["redistort_format"] == smeta["full"]["plate"],
         "nuke_stmaps_raw": reads.get("READ_STMAP_UNDISTORT", {}).get("raw") and reads.get("READ_STMAP_REDISTORT", {}).get("raw"),
-        "nuke_undistort_path": res["apply_undistort_inputs"] == ["CROP_BLACK_OUTSIDE", "READ_STMAP_UNDISTORT"],
-        "nuke_redistort_example": res["apply_redistort_inputs"] == [("TRACKING_REFERENCE_FLATTEN" if has_ref else "APPLY_UNDISTORT"),
-                                                                    "READ_STMAP_REDISTORT"],
+        "nuke_undistort_path": res["apply_undistort_inputs"] == ["CROP_BLACK_OUTSIDE", "READ_STMAP_UNDISTORT"]
+                               and res["crop"]["inputs"] == ["READ_ORIGINAL_PLATE"],
+        # v0.2.1 TEST2 (Artist reference topology): tracking reference -> APPLY_REDISTORT <- redistort STMap.
+        # No reference: the earlier example input APPLY_UNDISTORT (no-reference case not redesigned yet)
+        "nuke_redistort_example": res["apply_redistort_inputs"] == [("TRACKING_REFERENCE_FLATTEN" if has_ref
+                                                                     else "APPLY_UNDISTORT"), "READ_STMAP_REDISTORT"],
+        "nuke_reference_feeds_redistort_only": consumers_of_ref == (["APPLY_REDISTORT"] if has_ref else []),
         "nuke_reference_frame_map": (not has_ref) or all(
             ref_files.get(str(f), ref_files.get(f)) == os.path.basename(R["inputs"]["tracking_flatten_pattern"] % (f - off)
                                                                         if R["options"]["flatten_mode"] == "reference_ai_tracking"

@@ -101,6 +101,82 @@ def write_nk(lens_json, nk, nuke=None, path_mode="relative"):
     return r
 
 
+def _tcl_quote(path):
+    if re.fullmatch(r"[A-Za-z0-9_./:\\-]+", path):
+        return path
+    return '"' + re.sub(r'([\\"\[\]$])', r"\\\1", path) + '"'
+
+
+def finalize_root_name(nk, final_path):
+    """Set the Root 'name' of a .nk written in the stage to its final delivery path.
+    Nuke records the path it saved to (the stage) as Root name -- some versions in a form the
+    header clean-up above does not catch.  Only the Root block's own name knob is touched; every
+    other reference (Read files, ...) stays as written, so the stage-leak validation still sees it."""
+    lines = open(nk, encoding="utf-8").read().replace("\r\n", "\n").split("\n")
+    start, end, depth_at = _root_block(lines)
+    if start is None:
+        raise RuntimeError(f"no Root block in {nk}")
+    final = final_path.replace(os.sep, "/")
+    value = f" name {_tcl_quote(final)}"
+    # every name knob of the Root itself (depth 1), wherever Nuke put it; nested values untouched
+    body = [i for i in range(start + 1, end) if depth_at[i] == 1 and re.match(r"^\s*name(\s|$)", lines[i])]
+    first = next((i for i in range(start + 1, end) if depth_at[i] == 1 and lines[i].strip() == "inputs 0"), None)
+    for i in reversed(body):
+        del lines[i]
+    at = start + 1
+    if first is not None:
+        at = first + 1 - sum(1 for i in body if i < first)
+    lines.insert(at, value)
+    open(nk, "w", encoding="utf-8", newline="\n").write("\n".join(lines))
+    names = root_names(nk)
+    if names != [final]:  # never hand an ambiguous Root to validation / the Artist
+        raise RuntimeError(f"Root name finalisation failed: {names}")
+    return value.strip()
+
+
+def _root_block(lines):
+    """(first line, closing line, brace depth at the start of every line) of the top-level Root block.
+    TCL rules, as Nuke parses the node body (a braced word): every brace counts except
+    backslash-escaped ones; double quotes do not hide braces."""
+    depth, start, depth_at = 0, None, []
+    for i, ln in enumerate(lines):
+        depth_at.append(depth)
+        if start is None and depth == 0 and re.match(r"^\s*Root\s*\{\s*$", ln):
+            start = i
+        esc = False
+        for ch in ln:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if start is not None and depth == 0:
+                    return start, i, depth_at + [depth] * (len(lines) - i - 1)
+    return None, None, depth_at
+
+
+def root_names(nk):
+    """values of the Root block's own name knobs (unquoted)"""
+    lines = open(nk, encoding="utf-8").read().replace("\r\n", "\n").split("\n")
+    start, end, depth_at = _root_block(lines)
+    if start is None:
+        return []
+    out = []
+    for i in range(start + 1, end):
+        m = re.match(r"^\s*name(?:\s+(.*))?$", lines[i]) if depth_at[i] == 1 else None
+        if m:
+            v = (m.group(1) or "").strip()
+            if len(v) >= 2 and v[0] == v[-1] == '"':
+                v = re.sub(r"\\(.)", r"\1", v[1:-1])
+            elif len(v) >= 2 and v[0] == "{" and v[-1] == "}":
+                v = v[1:-1]
+            out.append(v)
+    return out
+
+
 def build(meta_path, out_root, plate_mode="copy", solver="converged", nuke=NUKE, maya_dir=None,
           render_flatten=True):
     meta = json.load(open(meta_path))
@@ -142,8 +218,8 @@ def build(meta_path, out_root, plate_mode="copy", solver="converged", nuke=NUKE,
         plate_name = os.path.basename(src["path"])
         plate_first, plate_last = src["source_first_frame"], src["source_last_frame"]
     else:
-        plate_files = sorted(f for f in glob.glob(os.path.join(src["path"], "*"))
-                             if os.path.splitext(f)[1].lower() in ((".exr",) if src["kind"] == "exr_sequence" else (".jpg", ".jpeg")))
+        exts = {"exr_sequence": (".exr",), "jpg_sequence": (".jpg", ".jpeg"), "png_sequence": (".png",)}[src["kind"]]
+        plate_files = sorted(f for f in glob.glob(os.path.join(src["path"], "*")) if os.path.splitext(f)[1].lower() in exts)
         pat = seq_pattern(plate_files)
         if pat is None:
             raise stmap_generator.Unsupported("source sequence is not a single padded file pattern")

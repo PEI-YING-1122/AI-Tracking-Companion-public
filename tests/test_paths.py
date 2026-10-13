@@ -10,6 +10,8 @@ Layout under the root:
     workflow/   mock projects A / B / C, their project configs, scratch work
     baseline/   the production baseline shot (folder named in the local config): shot / project configs, work
     results/    regression result JSON (read by tests/baseline_metrics.py)
+    baselines_private/  frozen regression baselines measured on the production baseline shot
+                (v0.1.0.json, ...) -- private, never in git; missing -> baseline compare NOT RUN
     manual_qc/  archive (not used by any test)
 """
 import json
@@ -68,6 +70,21 @@ def baseline_shot():
             "project": f"{d}/projects/{b['project_config']}", "ambiguous_project": f"{d}/projects/{b['ambiguous_project_config']}",
             "work": f"{d}/work/{b['shot']}", "plate_exr": b["plate_exr_frame"], "plate_jpg": b["plate_jpg_frame"],
             "plate_jpg_pattern": b["plate_jpg_pattern"]}
+
+
+def baseline_expected():
+    """Expected Check values of the production baseline shot, from the PRIVATE local config
+    (baseline.expected) -- never derived from the output under test, never in git."""
+    e = (_local().get("baseline") or {}).get("expected")
+    if not e:
+        raise TestDataNotConfigured("tests/local_test_config.json has no 'baseline.expected' section "
+                                    "(see tests/local_test_config.example.json)")
+    return e
+
+
+def private_baselines(*p):
+    """<test data root>/baselines_private/...: the frozen v0.1.0 regression baselines (private)."""
+    return _join("baselines_private", *p)
 
 
 def aliases():

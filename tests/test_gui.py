@@ -40,6 +40,7 @@ import companion_gui as G  # noqa: E402
 
 PY = sys.executable
 BL = tp.baseline_shot()   # production baseline shot: names from the local config only
+EXP = tp.baseline_expected()   # its expected Check values: private fixture (local config), never from the output
 SQ_IN = json.load(open(BL["shot_config"]))["vars"]["input_root"]
 SQ_EXR = BL["plate_exr"]
 SQ_JPG = BL["plate_jpg"]
@@ -252,15 +253,19 @@ def main():
     f = v["fields"]
     R["T12_check"] = {"view": v, "ok": v["status"] == "Ready" and v["buttons"] == {"check": True, "start": True, "stop": False}}
     R["T09_fps_exr_header"] = {"fps": v["fps"], "src": v["fps_source"], "field": f["FPS"],
-                               "ok": v["fps"] == "24" and v["fps_source"] == "Source: EXR Header" and "24 (EXR Header)" in f["FPS"]}
+                               "ok": v["fps"] == str(EXP["fps"]) and v["fps_source"] == f"Source: {EXP['fps_source']}"
+                               and f"{EXP['fps']} ({EXP['fps_source']})" in f["FPS"]}
     R["T21_scene_camera_labels"] = {"scene": f["Tracking Scene"], "camera": f["Camera"],
-                                    "ok": f["Tracking Scene"].startswith("✓ ") and f["Camera"].startswith("✓ Ready")
-                                    and "jpg" not in f["Camera"]}
+                                    "ok": f["Tracking Scene"].startswith(f"✓ {EXP['scene']}") and f["Camera"].startswith("✓ Ready")
+                                    and EXP["scene"] not in f["Camera"]}
+    (a, b), (ta, tb) = EXP["frames"], EXP["tracking_frames"]
+    (sw, sh), (cw, ch) = EXP["source_resolution"], EXP["production_canvas"]
+    want_frames, want_res = f"✓ {a}–{b} ({b - a + 1} frames)", f"✓ {sw}×{sh} → {cw}×{ch}"
+    want_log = f"Tracking frames {ta}–{tb} = source frames {a}–{b}"
     R["T22_frames"] = {"frames": f["Frames"], "resolution": f["Resolution"],
-                       "internal_in_log": "Tracking frames " in w.log.toPlainText(),
-                       "ok": f["Frames"].startswith("✓ ") and f["Frames"].endswith(" frames)") and "tracking" not in f["Frames"]
-                       and f["Resolution"].startswith("✓ ") and " → " in f["Resolution"]
-                       and "Tracking frames " in w.log.toPlainText()}
+                       "internal_in_log": want_log in w.log.toPlainText(),
+                       "ok": f["Frames"] == want_frames and "tracking" not in f["Frames"]
+                       and f["Resolution"] == want_res and want_log in w.log.toPlainText()}
     P["T12"] = parity(w)
 
     # T06 / T13 Start into a missing export folder ----------------------------------------------

@@ -1,0 +1,10 @@
+{
+ "release": "v0.2.1",
+ "note": "Reviewed v0.1.0 baseline leaves that v0.2.1 changes on purpose (workstation compatibility fixes: Nuke Artist setup layout / Root name). In v0.2.1 the redistort example input is the tracking reference again (Artist reference topology), so apply_redistort_inputs and the REDISTORT renders are compared strictly against v0.1.0. Lens / STMap / camera / point cloud / Maya values are not listed and must stay identical.",
+ "changes": [
+  {"pattern": "^demo_sh0010_verify\\.json\\.nuke\\.nodes\\[\\d+\\]$",
+   "reason": "new BD_TRACKING_REFERENCE backdrop shifts the positions of the sorted node list (node set checked by nuke_graph_exact)"},
+  {"pattern": "^demo_sh0010_companion_manifest\\.json\\.files\\.nuke_setup\\.bytes$",
+   "reason": ".nk content: TRACKING REFERENCE backdrop, LENS_INFO text, Root name finalised to the delivery path"}
+ ]
+}

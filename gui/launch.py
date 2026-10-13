@@ -31,6 +31,10 @@ def main():
         pass
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
+        if "--setup" in sys.argv[1:]:  # Configure_Companion.bat: Workstation Setup window
+            sys.argv.remove("--setup")
+            import workstation_setup
+            workstation_setup.main()
         import companion_gui
         companion_gui.main()
     except SystemExit:

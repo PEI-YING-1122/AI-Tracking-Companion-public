@@ -23,6 +23,8 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".mxf", ".m4v"}
 IMAGE_EXTS = {".exr", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".dpx"}
 SEQ_RE = re.compile(r"^(.*?)(\d+)(\.[^.]+)$")
 NCC_MIN = 0.90
+WORKING_IMAGES = ("inside the AI Tracking scene folder (working images, not a source plate). "
+                  "Do not select AI Tracking working images. Select the original distorted production plate.")
 
 
 # ------------------------------------------------------------------ scene
@@ -83,6 +85,14 @@ def _jpeg_size(path):
     return None
 
 
+def _png_size(path):
+    with open(path, "rb") as f:
+        data = f.read(24)
+    if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", data[16:24])
+
+
 def image_size(path):
     ext = os.path.splitext(path)[1].lower()
     try:
@@ -90,6 +100,8 @@ def image_size(path):
             s = _exr_size(path)
         elif ext in (".jpg", ".jpeg"):
             s = _jpeg_size(path)
+        elif ext == ".png":
+            s = _png_size(path)
         else:
             s = None
         if s:
@@ -153,7 +165,7 @@ def cheap_check(c, facts, ffprobe=None):
     reasons, info = [], {}
     if facts.get("scene_dir") and _inside(c["files"][0], facts["scene_dir"]):
         # AI Tracking's own extracted / undistorted frames match perfectly but are not the plate
-        return False, ["inside the AI Tracking scene folder (working images, not a source plate)"], info
+        return False, [WORKING_IMAGES], info
     n_need = facts["extracted_frames"]
     tw, th = facts["tracking_resolution"]
     if c["kind"] == "video":
@@ -262,17 +274,30 @@ def _candidate_from_path(p):
     p = p.replace("\\", "/")
     if os.path.isfile(p) and os.path.splitext(p)[1].lower() in VIDEO_EXTS:
         return {"kind": "video", "pattern": p, "files": [p]}
+    want = None  # the one sequence the Artist picked: prefix, padding, extension (case-insensitive)
     if os.path.isfile(p) and os.path.splitext(p)[1].lower() in IMAGE_EXTS:  # one frame picked in a file dialog
         m = SEQ_RE.match(os.path.basename(p))
         if m:
+            want = (m.group(1), len(m.group(2)), m.group(3).lower())
             p = os.path.join(os.path.dirname(p), m.group(1) + "#" * len(m.group(2)) + m.group(3)).replace("\\", "/")
     if re.search(r"#+|%0?\d*d", os.path.basename(p)):
         seqs = _sequences([f for f in glob.glob(_glob_pattern(p)) if os.path.isfile(f)])
+        pm = re.search(r"(#+)|%0?(\d*)d", os.path.basename(p))
+        if want is None and pm:
+            b = os.path.basename(p)
+            want = (b[:pm.start()], len(pm.group(1)) if pm.group(1) else int(pm.group(2) or 0), b[pm.end():].lower())
+        if want is not None and len(seqs) > 1:  # e.g. shot_####.png also globs shot_v2_0001.png
+            seqs = [s for s in seqs if _seq_id(s) == want]
     elif os.path.isdir(p):
         seqs = _sequences([f for f in glob.glob(os.path.join(p, "*")) if os.path.isfile(f)])
     else:
         seqs = []
     return seqs[0] if len(seqs) == 1 else None
+
+
+def _seq_id(seq):
+    m = re.match(r"^(.*)%0(\d+)d(\.[^.]+)$", os.path.basename(seq["pattern"]))
+    return (m.group(1), int(m.group(2)), m.group(3).lower()) if m else None
 
 
 def suggest_shot_name(regex, *texts):

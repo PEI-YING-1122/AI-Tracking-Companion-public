@@ -20,7 +20,9 @@ No project config is needed (project configs remain a CLI / pipeline option).
   camera / lens metadata, tracking resolution and frames are read from it.
 - **Shot Name** — required; the basename of every delivered file (`<shot>_cam_corrected.abc`, …).
 - **Original Plate ⓘ** — the original distorted plate: any frame of an image sequence
-  (EXR / JPG / PNG / …) or a video (MOV / MP4). Resolution, frame range and FPS metadata come from it.
+  (EXR / JPG / JPEG / PNG, any letter case) or a video (MOV / MP4). Only the picked sequence is
+  read, even if other sequences share the folder. Resolution, frame range and FPS metadata come
+  from it. AI Tracking working images are refused.
 - **Export Folder** — defaults to `<AI Tracking Folder>/export`; can be changed. An existing
   folder is used as it is (never deleted, cleared or recreated); a missing one is created.
   Only the Companion's own files (`lens/ maya/ metadata/ nuke/<shot>_…`) are written.
@@ -31,7 +33,20 @@ No project config is needed (project configs remain a CLI / pipeline option).
 ## Check
 Status **Ready**, **Ready (warnings)**, **BLOCKED** (Start disabled) or **FAIL**, then:
 Tracking Scene, Camera, Original Plate, Flatten, Frames (`1001–1100 (100 frames)`),
-Resolution (`plate → production canvas`), FPS (value and source), Export.
+Resolution (`plate → production canvas`), FPS (value and source), Nuke Generator (the Nuke
+version that writes the `.nk`; full path in Details / Log and Workstation Setup), Export.
+
+Flatten: `✓ AI Tracking flatten (reference)` (production compatible), `ⓘ Tracking Flatten:
+Reference Only (principal point Δ …)` (reference compatible: still the Maya image plane and the
+Nuke tracking reference) or `⚠ Tracking flatten is incompatible and was not used`.
+
+## Workstation Setup
+On start the GUI checks `configs/site.json`. Missing file, placeholders or tools that do not exist
+→ a red **Workstation Setup Required** box lists them, with **Configure**. **Workstation Setup…**
+(bottom right) and `Configure_Companion.bat` open the same window: detected Houdini / Maya /
+Nuke Target / FFmpeg / FFprobe / AI Tracking (dropdown when several, Browse otherwise), Rescan,
+Save Configuration (validated, never writes invalid JSON). Nuke Target (supported: Nuke 13–17) defaults to the lowest supported
+installed version.
 An existing Companion delivery of this shot is shown as information; Start asks before overwriting.
 The internal tracking frame mapping is in Details / Log.
 

@@ -3,9 +3,13 @@
     python tests/run_all.py [--skip-poc]
 
 Order: PoC -> workflow -> transactional builder -> project mode -> partial build -> GUI (headless)
--> baseline compare.  --skip-gui leaves the GUI suite out (no PySide6 / no time).
+-> v0.2.1 deployment fixes -> baseline compare (v0.1.0, with the reviewed v0.2.1 intended changes).  --skip-gui leaves the GUI suite out (no PySide6 / no time).
 Writes <test data>/results/run_all_summary.json; exit 0 only if everything passes and
-the v0.1.0 baseline values are all identical (new values = added coverage, allowed).
+the v0.1.0 baseline values are all identical apart from the reviewed intended changes in
+tests/baselines/v0.2.1_intended_changes.json (new values = added coverage, allowed).
+The v0.1.0 baseline holds values measured on the production baseline shot, so it is private test
+data: <test data>/baselines_private/v0.1.0.json (see tests/test_paths.py).  Missing -> the compare
+is reported as NOT RUN and the exit code is 3 (never a silent pass).
 """
 import argparse
 import json
@@ -55,23 +59,34 @@ def main():
                                                   os.path.join(RES, "test_partial_build.json")])
     if not a.skip_gui:
         rcs["gui"] = step("gui", ["tests/test_gui.py", os.path.join(RES, "test_gui.json")])
+    rcs["v021_fixes"] = step("v021_fixes", ["tests/test_v021_fixes.py", os.path.join(RES, "test_v021_fixes.json")])
+    rcs["v021_test2"] = step("v021_test2", ["tests/test_v021_test2.py", os.path.join(RES, "test_v021_test2.json")])
     cand = os.path.join(ROOT, "tests", "baselines", "candidate.json")
     cmp_path = os.path.join(RES, "baseline_compare.json")
     for stale in (cand, cmp_path):  # never compare a previous run's capture
         if os.path.exists(stale):
             os.remove(stale)
-    rcs["capture"] = step("capture", ["tests/baseline_metrics.py", "capture", cand,
-                                      "--extra", tp.baseline_shot()["work"]])
-    rcs["baseline_v0.1.0"] = step("baseline_compare", ["tests/baseline_metrics.py", "compare",
-                                                       "tests/baselines/v0.1.0.json", cand, cmp_path])
+    not_run = {}
+    base = tp.private_baselines("v0.1.0.json")
+    if os.path.exists(base):
+        rcs["capture"] = step("capture", ["tests/baseline_metrics.py", "capture", cand,
+                                          "--extra", tp.baseline_shot()["work"]])
+        rcs["baseline_v0.1.0"] = step("baseline_compare", ["tests/baseline_metrics.py", "compare",
+                                                           base, cand, cmp_path,
+                                                           "--intended", "tests/baselines/v0.2.1_intended_changes.json"])
+    else:
+        not_run["baseline_v0.1.0"] = f"private baseline missing: {base}"
+        print(f"[NOT RUN] baseline_compare  ({not_run['baseline_v0.1.0']})", flush=True)
     cmp_ = json.load(open(cmp_path, encoding="utf-8")) if os.path.exists(cmp_path) else {
-        k: None for k in ("baseline_values", "compared", "different", "missing_in_candidate", "new_in_candidate", "identical")}
-    summary = {"return_codes": rcs, "all_ok": all(v == 0 for v in rcs.values()),
-               "baseline": {k: cmp_[k] for k in ("baseline_values", "compared", "different", "missing_in_candidate",
-                                                 "new_in_candidate", "identical")}}
+        k: None for k in ("baseline_values", "compared", "different", "missing_in_candidate", "new_in_candidate",
+                          "intended_changes", "identical_except_intended", "identical")}
+    summary = {"return_codes": rcs, "not_run": not_run, "all_ok": all(v == 0 for v in rcs.values()) and not not_run,
+               "baseline": {k: cmp_.get(k) for k in ("baseline_values", "compared", "different", "missing_in_candidate",
+                                                     "new_in_candidate", "intended_changes", "identical_except_intended",
+                                                     "identical")}}
     json.dump(summary, open(os.path.join(RES, "run_all_summary.json"), "w"), indent=1)
     print(json.dumps(summary, indent=1))
-    sys.exit(0 if summary["all_ok"] else 1)
+    sys.exit(0 if summary["all_ok"] else 3 if all(v == 0 for v in rcs.values()) else 1)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 | Layer | File | Content | Who edits |
 |---|---|---|---|
-| site | `configs/site.json` (untracked; from `site.example.json`) | tool executables only (hython, mayapy, nuke, ffprobe, ffmpeg, upstream repo) | TD per workstation |
+| site | `configs/site.json` (untracked) | tool executables only (hython, mayapy, nuke, ffprobe, ffmpeg, upstream repo) | Workstation Setup (`Configure_Companion.bat`); TD may edit by hand (`site.example.json`) |
 | project (optional preset) | `<project>.json` (from `configs/project_template.json`) | fps fallback, plate search rules, export rule, shot naming rule, work root | TD per project |
 | shot | generated per build (resolver / GUI) | resolved paths, detected facts, artist overrides, build provenance | the tool (Artist via GUI) |
 
@@ -16,7 +16,8 @@ future Advanced / Preset option.
 |---|---|
 | export folder | `<AI Tracking folder>/export` unless given; created if missing, never cleared |
 | fps | original plate metadata (video / EXR header) → 24 (Default, information only) → Artist override |
-| flatten | AI Tracking flatten as Nuke reference when it is in the production space, otherwise not used (WARNING) |
+| flatten | AI Tracking flatten as Maya image plane / Nuke reference: production compatible (PP Δ < 0.01 px), reference compatible (same resolution / canvas / frames, PP Δ ≤ 0.05 px, labelled reference only), otherwise not used (WARNING). Never a lens source. |
+| nuke target | site key `nuke` = the Nuke that writes the `.nk`; supported Nuke 13.0–17.x; Workstation Setup proposes the lowest installed supported version and refuses others |
 | work folder | `<Companion>/work/<shot>`; site key `work_root` or env `COMPANION_WORK_ROOT` overrides |
 | backups | `backup_keep` 2 |
 

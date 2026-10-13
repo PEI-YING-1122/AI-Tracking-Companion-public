@@ -67,7 +67,14 @@ import auto_detect  # noqa: E402
 import build_transaction as bt  # noqa: E402
 from version import __version__ as COMPANION_VERSION  # noqa: E402
 
-PP_TOL = 0.01  # px: AI Tracking flatten counts as production space only within this
+# AI Tracking flatten compatibility (single source of truth).  The flatten is only ever a REFERENCE
+# image (Maya image plane / Nuke tracking reference); the production lens is always
+# original distorted plate -> production undistort STMap.
+#   production_compatible: principal point delta < PP_TOL_PRODUCTION (strict, as v0.2.0)
+#   reference_compatible:  same resolution / canvas / frames, delta <= PP_TOL_REFERENCE
+#   incompatible:          anything else -> not used
+PP_TOL_PRODUCTION = 0.01  # px
+PP_TOL_REFERENCE = 0.05   # px; no earlier code constant existed (Revision 01 round-trip QC: shifts <= 0.05 px)
 ALL_OUTPUTS = ("lens", "maya", "nuke")
 OUTPUT_KEYS = {
     "lens": ("lens_undistort", "lens_redistort"),
@@ -129,7 +136,7 @@ def shot_config_from_project(a):
     ffp = None
     try:
         ffp = site_config.get("ffprobe")
-    except (KeyError, FileNotFoundError):
+    except (KeyError, FileNotFoundError, ValueError):
         pass
     plate = auto_detect.resolve_plate(proj, tokens, facts, ffp, override=overrides.get("source_plate"))
     if plate["status"] not in ("auto", "override"):
@@ -165,7 +172,7 @@ SHOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 def default_work_root():
     try:
         return site_config.get("work_root", must_exist=False).replace("\\", "/")
-    except KeyError:
+    except (KeyError, FileNotFoundError, ValueError):  # no / unreadable site.json: Workstation Setup reports it
         return os.path.join(ROOT, "work").replace("\\", "/")
 
 
@@ -197,11 +204,14 @@ def shot_config_direct(a):
     ffp = None
     try:
         ffp = site_config.get("ffprobe")
-    except (KeyError, FileNotFoundError):
+    except (KeyError, FileNotFoundError, ValueError):
         pass
     plate = auto_detect.resolve_plate({}, {}, facts, ffp, override=a.plate.strip())
     if plate["status"] != "override":
         reasons = "; ".join(r for c in plate["candidates"] for r in c.get("reasons", []))
+        if auto_detect.WORKING_IMAGES in reasons:
+            raise bt.BuildStop(bt.BLOCKED, "plate_invalid", "The Original Plate is " + auto_detect.WORKING_IMAGES,
+                               plate["candidates"])
         raise bt.BuildStop(bt.BLOCKED, "plate_invalid", "The Original Plate does not match this AI Tracking result"
                            + (f" ({reasons})." if reasons else "."), plate["candidates"])
     plate["status"] = "artist"
@@ -287,21 +297,61 @@ def note(record, code, message):
 
 
 def resolve_flatten(meta, facts, R, record):
-    """AI Tracking flatten as the Nuke reference when it is in the production space.  Direct mode
-    (flatten_fallback_none) builds without it otherwise; other modes are BLOCKED as before."""
+    """AI Tracking flatten as the Maya image plane / Nuke tracking reference (never a lens source).
+    production_compatible / reference_compatible -> used (reference_compatible: reference only);
+    incompatible -> direct mode (flatten_fallback_none) builds without it, other modes are BLOCKED."""
     opts = R["options"]
     if opts["flatten_mode"] != "reference_ai_tracking":
         return None
     flat = flatten_compatibility(meta, facts, R)
-    if flat["compatible"]:
+    record.extra["flatten"] = {k: flat[k] for k in ("status", "role", "pp_delta_px", "tolerance_px")}
+    if flat["status"] == "reference_compatible":
+        dx, dy = (abs(v) for v in flat["pp_delta_px"])
+        note(record, "flatten_reference_only",
+             f"Tracking Flatten: Reference Only. Principal point differs by {max(dx, dy):.6f} px "
+             f"(production tolerance {flat['production_tolerance_px']:g} px, reference tolerance "
+             f"{flat['tolerance_px']:g} px). Used as the Maya image plane and the Nuke tracking reference only; "
+             "the production lens always comes from the original plate and the STMaps.")
+    if flat["status"] != "incompatible":
         return flat
     if opts.get("flatten_fallback_none"):
         opts["flatten_mode"] = "none"
-        record.issue(bt.WARNING, "flatten_not_used", "The AI Tracking flatten is not in the production space; "
-                     "the Nuke setup is built without a tracking reference.", flat)
+        record.issue(bt.WARNING, "flatten_incompatible", "Tracking flatten is incompatible and was not used. "
+                     f"Reason: {flatten_reasons(flat)}. Maya has no image plane; the Nuke setup has no tracking "
+                     "reference.", flat)
         return None
     raise bt.BuildStop(bt.BLOCKED, "flatten_space",
-                       "AI Tracking flatten is not in the production space (set flatten_mode 'none')", flat)
+                       "AI Tracking flatten is incompatible with the production space (set flatten_mode 'none')", flat)
+
+
+def stage_leaks(files, stage):
+    """keys of staged files that still reference the stage folder anywhere (Read / file knobs,
+    loader, metadata, Root name ...).  Nothing is exempt: a leak is a FAIL."""
+    st = stage.replace("\\", "/").lower()
+    return [k for k, path in files.items()
+            if st in open(path, encoding="utf-8", errors="replace").read().replace("\\", "/").lower()]
+
+
+def last_flatten_status(record):
+    return (record.extra.get("flatten") or {}).get("status")
+
+
+def workstation_check(keys):
+    """Missing / placeholder / wrong tool paths -> BLOCKED 'Workstation Setup Required' (never a
+    FileNotFoundError deep inside a build)."""
+    import workstation
+    st = workstation.status(keys=keys)
+    if not st["ok"]:
+        raise bt.BuildStop(bt.BLOCKED, "workstation_setup",
+                           "Workstation Setup Required: " + "; ".join(p["message"] for p in st["problems"])
+                           + ". Run Configure_Companion.bat (Workstation Setup).", st["problems"])
+
+
+def nuke_generator():
+    """the Nuke that writes the .nk (site key 'nuke' = the Companion's Nuke target)"""
+    import workstation
+    path = site_config.get("nuke").replace("\\", "/")
+    return {"version": workstation.nuke_version(path), "path": path}
 
 
 def lens_facts(meta):
@@ -401,7 +451,7 @@ def detect(a):
         ffp = None
         try:
             ffp = site_config.get("ffprobe")
-        except (KeyError, FileNotFoundError):
+        except (KeyError, FileNotFoundError, ValueError):
             pass
         for ri, rule in enumerate(proj.get("plate_search") or []):
             for c in auto_detect.candidates_for_rule(project_config.substitute(rule, tokens, "plate_search")):
@@ -423,6 +473,12 @@ def detect(a):
     return report
 
 
+def source_meta(I):
+    """companion metadata for the shot's plate: a sequence pattern reads only that sequence"""
+    return companion_meta.build_meta(I["ai_tracking_scene_dir"], I["source_plate"], I["transforms_json"],
+                                     I["transforms_undistorted_json"], source_pattern=I.get("source_plate_pattern"))
+
+
 def plate_read_path(meta, R):
     src = meta["source"]
     if src["kind"] == "video":
@@ -430,7 +486,7 @@ def plate_read_path(meta, R):
     if R["inputs"]["source_plate_pattern"]:
         return R["inputs"]["source_plate_pattern"], src["source_first_frame"], src["source_last_frame"]
     import build_nuke_package as bnp
-    exts = (".exr",) if src["kind"] == "exr_sequence" else (".jpg", ".jpeg")
+    exts = dict(companion_meta.SEQ_KINDS)[src["kind"]]
     files = sorted(f for f in glob.glob(os.path.join(src["path"], "*")) if os.path.splitext(f)[1].lower() in exts)
     pat = bnp.seq_pattern(files)
     if pat is None:
@@ -438,21 +494,57 @@ def plate_read_path(meta, R):
     return os.path.join(src["path"], pat[0]).replace("\\", "/"), pat[1], pat[2]
 
 
+FLATTEN_ROLE = {"production_compatible": "reference", "reference_compatible": "reference_only",
+                "incompatible": "not_used"}
+
+
+def flatten_reasons(flat):
+    c, d = flat["checks"], max(abs(v) for v in flat["pp_delta_px"])
+    out = []
+    if not c["tracking_resolution_equals_source"]:
+        out.append("the tracking resolution differs from the original plate")
+    if not c["canvas_size_equal"]:
+        out.append("the flatten canvas size differs from the production canvas")
+    if not c["frames_present"]:
+        out.append(f"flatten frames missing ({flat['flatten_frames']} found)")
+    if d > PP_TOL_REFERENCE:
+        out.append(f"principal point differs by {d:.6f} px (reference tolerance {PP_TOL_REFERENCE:g} px)")
+    return "; ".join(out) or "not in the production space"
+
+
+def production_pp_tol():
+    """PP_TOL_PRODUCTION; tests may tighten it (COMPANION_TEST_PP_TOL_PRODUCTION) to turn a real shot
+    into a reference_compatible case -- it can never be loosened beyond PP_TOL_PRODUCTION."""
+    t = os.environ.get("COMPANION_TEST_PP_TOL_PRODUCTION")
+    return min(float(t), PP_TOL_PRODUCTION) if t else PP_TOL_PRODUCTION
+
+
 def flatten_compatibility(meta, smeta, R):
+    """-> status production_compatible | reference_compatible | incompatible (+ the evidence)"""
     tr, src = meta["tracking"], meta["source"]
     legacy = smeta["legacy_canvas"] if "legacy_canvas" in smeta else smeta["legacy_full_canvas_info_only"]
     prod = smeta["canvas"] if "canvas" in smeta else smeta["full"]["canvas"]
     legacy, prod = list(legacy), list(prod)
     n_flat = len(glob.glob(os.path.join(R["inputs"]["tracking_flatten_dir"], "frame_*.jpg")))
-    checks = {
+    dx, dy = abs(legacy[2] - prod[2]), abs(legacy[3] - prod[3])
+    tol_p = production_pp_tol()
+    space = {  # resolution / canvas / frame mapping: required for any use of the flatten
         "tracking_resolution_equals_source": [tr["proxy_width"], tr["proxy_height"]] == [src["width"], src["height"]],
         "canvas_size_equal": legacy[:2] == prod[:2],
-        "principal_point_within_tol": abs(legacy[2] - prod[2]) < PP_TOL and abs(legacy[3] - prod[3]) < PP_TOL,
         "frames_present": n_flat == tr["registered_frames"],
     }
-    return {"compatible": all(checks.values()), "checks": checks, "flatten_frames": n_flat,
-            "legacy_canvas": legacy, "production_canvas": prod,
-            "pp_delta_px": [prod[2] - legacy[2], prod[3] - legacy[3]], "tolerance_px": PP_TOL}
+    checks = dict(space, principal_point_within_tol=dx < tol_p and dy < tol_p)
+    if all(checks.values()):
+        status = "production_compatible"
+    elif all(space.values()) and dx <= PP_TOL_REFERENCE and dy <= PP_TOL_REFERENCE:
+        status = "reference_compatible"
+    else:
+        status = "incompatible"
+    return {"status": status, "compatible": status == "production_compatible", "role": FLATTEN_ROLE[status],
+            "checks": checks, "flatten_frames": n_flat, "legacy_canvas": legacy, "production_canvas": prod,
+            "pp_delta_px": [prod[2] - legacy[2], prod[3] - legacy[3]],
+            "production_tolerance_px": tol_p, "tolerance_px": PP_TOL_REFERENCE if status == "reference_compatible" else tol_p,
+            "reference_tolerance_px": PP_TOL_REFERENCE}
 
 
 def fingerprint(meta, smeta, plate):
@@ -533,6 +625,7 @@ def build(cfg_path, a, record, generated_cfg=None):
     t = time.time()
     stage_marker("preflight")
     # ---- Preflight + Resolve -------------------------------------------------------
+    workstation_check(["upstream_repo"])  # before anything imports the lens core (it loads AI Tracking code)
     upstream_install = os.path.dirname(site_config.get("upstream_repo"))
     try:
         R = path_resolver.resolve(cfg_path, protected_roots=[upstream_install], overwrite=True)
@@ -549,21 +642,16 @@ def build(cfg_path, a, record, generated_cfg=None):
             record.issue(bt.WARNING, "dependency", "Nuke needs the lens STMaps: Lens enabled automatically")
     keys = [k for o in sorted(outputs | {"metadata"}) for k in OUTPUT_KEYS[o]]
     tools = {"hython": "maya" in outputs, "mayapy": "maya" in outputs and opts.get("verify", True),
-             "nuke": "nuke" in outputs or opts["flatten_mode"] == "render"}
-    for tool, needed in tools.items():
-        if needed:
-            try:
-                site_config.get(tool)
-            except (KeyError, FileNotFoundError) as e:
-                raise bt.BuildStop(bt.BLOCKED, "tool_missing", f"{tool}: {e}")
+             "nuke": "nuke" in outputs or opts["flatten_mode"] == "render",
+             "ffprobe": os.path.splitext(I["source_plate"])[1].lower() in path_resolver.VIDEO_EXTS}
+    workstation_check([t for t, needed in tools.items() if needed])
     render = opts["flatten_mode"] == "render"
     if render and "nuke" not in outputs:
         raise bt.BuildStop(bt.BLOCKED, "dependency", "flatten_mode 'render' renders through the Nuke setup: enable Nuke")
     finals = [P[k] for k in keys]
     flat_frames = []
     if render:  # rendered flatten is part of the delivery: same transaction
-        m0 = companion_meta.build_meta(I["ai_tracking_scene_dir"], I["source_plate"], I["transforms_json"],
-                                       I["transforms_undistorted_json"])
+        m0 = source_meta(I)
         flat_frames = list(range(m0["source"]["source_first_frame"], m0["source"]["source_last_frame"] + 1))
         finals += [O["production_flatten"] % f for f in flat_frames]
     present = bt.existing_targets(finals)
@@ -577,8 +665,7 @@ def build(cfg_path, a, record, generated_cfg=None):
     Cancel.check("preflight")
     stage_marker("resolve")
     if a.dry_run:  # Check: same resolution and guards as a build, without maps / staging
-        meta = companion_meta.build_meta(I["ai_tracking_scene_dir"], I["source_plate"], I["transforms_json"],
-                                         I["transforms_undistorted_json"])
+        meta = source_meta(I)
         apply_fps_chain(meta, opts, record)
         if not meta["support"]["supported"]:
             raise bt.BuildStop(bt.BLOCKED, "unsupported", "Unsupported: " + "; ".join(meta["support"]["reasons"]), meta["support"])
@@ -596,7 +683,11 @@ def build(cfg_path, a, record, generated_cfg=None):
                       "status": ((gen.get("auto_detect") or {}).get("plate") or {}).get("status", "config")},
             "flatten": {"mode": opts["flatten_mode"],
                         "path": I["tracking_flatten_pattern"] if opts["flatten_mode"] == "reference_ai_tracking" else O.get("production_flatten"),
-                        "compatible": flat["compatible"] if flat else None},
+                        "compatible": flat["compatible"] if flat else None,
+                        "status": (flat or {}).get("status") or last_flatten_status(record),
+                        "role": (flat or {}).get("role"), "pp_delta_px": (flat or {}).get("pp_delta_px"),
+                        "tolerance_px": (flat or {}).get("tolerance_px")},
+            "nuke_generator": nuke_generator() if "nuke" in outputs else None,
             "fps": meta["source"]["fps"], "fps_source": meta["source"]["fps_source"],
             "frames": {"source": [plate[1], plate[2]],
                        "tracking": [tr["tracking_first_frame"] + off, tr["tracking_last_frame"] + off],
@@ -636,8 +727,7 @@ def build(cfg_path, a, record, generated_cfg=None):
         return out
 
     t = time.time()
-    meta = companion_meta.build_meta(I["ai_tracking_scene_dir"], I["source_plate"], I["transforms_json"],
-                                     I["transforms_undistorted_json"])
+    meta = source_meta(I)
     meta["delivery_name"] = shot
     apply_fps_chain(meta, opts, record)
     meta_path = os.path.join(build_dir, f"{shot}_companion_meta.json")
@@ -715,6 +805,12 @@ def build(cfg_path, a, record, generated_cfg=None):
     md = build_metadata(meta, smeta, R, plate, flat, record.build_id, fp, outputs)
     md["modules"] = mods
     md["nuke"]["status"] = "written" if "nuke" in mods else "not built"
+    fl = record.extra.get("flatten") or {}
+    md["flatten"].update(compatibility_status=fl.get("status"), role=fl.get("role") or "not_used",
+                         pp_delta_px=fl.get("pp_delta_px"), tolerance_px=fl.get("tolerance_px"),
+                         lens_source=False)  # never a production lens source (that is plate -> undistort STMap)
+    if "nuke" in outputs:
+        md["nuke"]["generator"] = nuke_generator()
     record.extra["delivery"] = {m: ("built" if m in outputs else "kept from build " + str(mods[m].get("build_id")) if m in mods
                                     else "not built") for m in ("maya", "nuke", "lens")}
     record.extra["delivery"]["metadata"] = "built"
@@ -729,12 +825,14 @@ def build(cfg_path, a, record, generated_cfg=None):
                          "plate": plate[0], "plate_first": plate[1], "plate_last": plate[2],
                          "stmap_undistort": P["lens_undistort"], "stmap_redistort": P["lens_redistort"],
                          "tracking_reference_flatten": md["flatten"]["path"], "flatten_mode": opts["flatten_mode"],
+                         "flatten_role": md["flatten"]["role"],
                          "flatten_frame_offset": md["flatten"]["frame_offset"],
                          "flatten_first": md["tracking"]["first_frame"] if md["flatten"]["frame_offset"] else plate[1],
                          "flatten_last": md["tracking"]["last_frame"] if md["flatten"]["frame_offset"] else plate[2]}
         spec_path = os.path.join(build_dir, f"{shot}_nk_spec.json")
         json.dump(spec, open(spec_path, "w"), indent=1)
         bnp.write_nk(spec_path, D["nuke_setup"], path_mode="absolute")
+        bnp.finalize_root_name(D["nuke_setup"], P["nuke_setup"])  # Nuke saved it in the stage: final path
         Cancel.check("nuke")
     if render:  # render from a stage-remapped copy (the final paths do not exist yet)
         rnk = remapped_copy(D["nuke_setup"], f"{shot}_lens_setup.render.nk")
@@ -752,10 +850,7 @@ def build(cfg_path, a, record, generated_cfg=None):
     # ---- Validate --------------------------------------------------------------------
     stage_marker("validate")
     t = time.time()
-    leaks = []
-    for k in ("metadata", "nuke_setup", "maya_loader"):
-        if k in keys and stage.lower() in open(D[k], encoding="utf-8", errors="replace").read().replace("\\", "/").lower():
-            leaks.append(k)
+    leaks = stage_leaks({k: D[k] for k in ("metadata", "nuke_setup", "maya_loader") if k in keys}, stage)
     if leaks:
         raise bt.BuildStop(bt.FAIL, "stage_path_leak", "staged files reference the stage folder", leaks)
     if opts.get("verify", True):
