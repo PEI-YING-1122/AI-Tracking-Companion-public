@@ -1,6 +1,7 @@
 {
  "_help": "Copy to tests/local_test_config.json (untracked) or set env COMPANION_TEST_DATA. 'baseline' names the production baseline shot under <test_data_root>/baseline/<dir>/; 'baseline.expected' holds its expected Check values (private); the frozen regression baselines measured on it live in <test_data_root>/baselines_private/ (v0.1.0.json, ...), never in git. 'aliases' maps its real names / paths to the neutral names used in comparisons (applied before every comparison).",
  "test_data_root": "<path to AI_Tracking_Companion_TestData>",
+ "baseline_capture_repo": "<checkout the private baselines were captured in (optional; default: this checkout)>",
  "baseline": {
   "dir": "<folder under baseline/>",
   "shot": "<shot name>",

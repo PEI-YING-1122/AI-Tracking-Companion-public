@@ -82,6 +82,12 @@ def baseline_expected():
     return e
 
 
+def capture_repo():
+    """The checkout the frozen baselines were captured in (private 'baseline_capture_repo'): its old
+    test_runs / work paths are mapped to the test data root before comparing.  Default: this checkout."""
+    return _local().get("baseline_capture_repo") or None
+
+
 def private_baselines(*p):
     """<test data root>/baselines_private/...: the frozen v0.1.0 regression baselines (private)."""
     return _join("baselines_private", *p)

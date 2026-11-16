@@ -89,7 +89,7 @@ def _relocations():
     """test data moved out of the repository (GUI implementation STEP 01): old -> new prefixes,
     then the test data root itself becomes <TEST_DATA> so paths compare across machines."""
     root = tp.root().replace("\\", "/")
-    pairs = sorted(((s.replace("\\", "/"), d.replace("\\", "/")) for s, d in migrate_test_data.plan(root, only_existing=False)),
+    pairs = sorted(((s.replace("\\", "/"), d.replace("\\", "/")) for s, d in migrate_test_data.plan(root, only_existing=False, repo=tp.capture_repo())),
                    key=lambda x: -len(x[0]))
     return pairs, root
 

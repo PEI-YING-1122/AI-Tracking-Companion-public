@@ -18,7 +18,8 @@ python tests/run_all.py [--skip-poc] [--skip-gui]
 paths and work sizes excluded); numbers must match to 1e-9. New values are allowed.
 It was measured on the production baseline shot, so it is **private test data** and not in git:
 `<root>/baselines_private/v0.1.0.json`. Without it `run_all` reports the compare as
-`NOT RUN` and exits with 3. The GUI suite reads the shot's expected Check values from
+`NOT RUN` and exits with 3. Paths recorded in the baselines refer to the checkout they were
+captured in; set `baseline_capture_repo` in the local config when running from another checkout. The GUI suite reads the shot's expected Check values from
 `baseline.expected` in `tests/local_test_config.json` (also private).
 
 Exit codes of `run_all.py` and the v0.2.1 suites: `0` all run and passed, `1` failure,

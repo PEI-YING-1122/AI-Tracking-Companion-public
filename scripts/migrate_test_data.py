@@ -20,8 +20,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TR = os.path.join(REPO, "test_runs")
 
 
-def plan(root, only_existing=True):
+def plan(root, only_existing=True, repo=None):
+    """old -> new locations; repo = the checkout the old paths refer to (default: this one)"""
     j = os.path.join
+    REPO = repo or globals()["REPO"]  # noqa: N806
+    TR = os.path.join(REPO, "test_runs")  # noqa: N806
     moves = []
     for d in ("walking-forest", "deliveries", "work_01_offset", "work_02a", "work_02c", "work_03", "fixtures", "packages"):
         moves.append((j(TR, d), j(root, "poc", d)))
